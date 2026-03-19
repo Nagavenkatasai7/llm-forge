@@ -116,7 +116,14 @@ class ChatEngine:
         self._setup_memory_tools()
 
     def _build_system_prompt(self) -> str:
-        """Build system prompt with injected memory context."""
+        """Build system prompt with injected memory context.
+
+        The final prompt is layered:
+          1. Core instructions + deep knowledge base (already in SYSTEM_PROMPT)
+          2. Dynamic memory context (session history, project state, user prefs)
+        Memory context is appended AFTER the knowledge base so that
+        session-specific details have highest recency weight.
+        """
         context_block = self.memory.build_context_block()
         if context_block.strip():
             return f"{SYSTEM_PROMPT}\n\n---\n\n{context_block}"

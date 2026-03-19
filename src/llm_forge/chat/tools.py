@@ -330,6 +330,46 @@ TOOLS = [
             "required": ["model_name", "mode", "num_samples"],
         },
     },
+    {
+        "name": "detect_project",
+        "description": "Scan a directory and determine what kind of project it is (Node.js, Python, Rust, etc.) and whether LLM Forge is already set up. Use this before setup_project to understand the user's directory.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "directory": {
+                    "type": "string",
+                    "description": "Path to the directory to scan (defaults to current working directory)",
+                    "default": ".",
+                },
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "setup_project",
+        "description": "Create the LLM Forge project structure in a directory. Creates configs/, data/, outputs/, examples/data/, .llmforge/, a starter config, and a .gitignore. Never overwrites existing files.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "directory": {
+                    "type": "string",
+                    "description": "Path to the directory where the project should be set up",
+                },
+                "mode": {
+                    "type": "string",
+                    "enum": ["root", "subdirectory", "auto"],
+                    "description": "Where to create the structure: 'root' (directly in directory), 'subdirectory' (in directory/llm-forge/), or 'auto' (detect based on existing content)",
+                    "default": "auto",
+                },
+                "include_examples": {
+                    "type": "boolean",
+                    "description": "Include example training data files (default: true)",
+                    "default": True,
+                },
+            },
+            "required": ["directory"],
+        },
+    },
     # ----- Memory tools (handled by ChatEngine, not execute_tool) -----
     {
         "name": "save_memory",
@@ -496,6 +536,14 @@ def execute_tool(name: str, input_data: dict) -> str:
                 num_epochs=input_data.get("num_epochs", 1),
                 batch_size=input_data.get("batch_size", 4),
                 seq_length=input_data.get("seq_length", 2048),
+            )
+        elif name == "detect_project":
+            return _detect_project(input_data.get("directory", "."))
+        elif name == "setup_project":
+            return _setup_project(
+                directory=input_data["directory"],
+                mode=input_data.get("mode", "auto"),
+                include_examples=input_data.get("include_examples", True),
             )
         else:
             return json.dumps({"error": f"Unknown tool: {name}"})
@@ -1485,4 +1533,34 @@ def _estimate_training(
         },
         "recommendation": " ".join(recommendations),
     }
+    return json.dumps(result, indent=2)
+
+
+# ---------------------------------------------------------------------------
+# Project setup tools
+# ---------------------------------------------------------------------------
+
+
+def _detect_project(directory: str) -> str:
+    """Detect the project type of a directory."""
+    from llm_forge.chat.project_setup import detect_project_type
+
+    result = detect_project_type(directory)
+    result["status"] = "ok"
+    return json.dumps(result, indent=2)
+
+
+def _setup_project(
+    directory: str,
+    mode: str = "auto",
+    include_examples: bool = True,
+) -> str:
+    """Scaffold the LLM Forge project structure."""
+    from llm_forge.chat.project_setup import scaffold_project
+
+    result = scaffold_project(
+        directory=directory,
+        mode=mode,
+        include_examples=include_examples,
+    )
     return json.dumps(result, indent=2)
