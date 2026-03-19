@@ -53,8 +53,8 @@ def run_evaluation(model_path: str, output_dir: str) -> dict:
 
     print(f"Model:  {model_path}")
     print(f"Tasks:  {', '.join(tasks)}")
-    print(f"Device: cuda")
-    print(f"Batch:  8")
+    print("Device: cuda")
+    print("Batch:  8")
     print()
 
     start = time.time()
@@ -106,11 +106,11 @@ def run_iti(model_path: str, output_dir: str) -> str:
     iti_output = str(Path(output_dir) / "merged_iti")
 
     print(f"Model:    {model_path}")
-    print(f"Dataset:  truthful_qa")
-    print(f"Samples:  500")
-    print(f"Heads:    48")
-    print(f"Alpha:    15.0")
-    print(f"Method:   center_of_mass")
+    print("Dataset:  truthful_qa")
+    print("Samples:  500")
+    print("Heads:    48")
+    print("Alpha:    15.0")
+    print("Method:   center_of_mass")
     print(f"Output:   {iti_output}")
     print()
 
@@ -143,7 +143,9 @@ def run_iti(model_path: str, output_dir: str) -> str:
     probe_elapsed = time.time() - start
 
     print(f"  Probing complete in {probe_elapsed:.1f}s")
-    print(f"  Geometry: {probe_result.num_layers} layers, {probe_result.num_heads_per_layer} heads/layer, dim={probe_result.head_dim}")
+    print(
+        f"  Geometry: {probe_result.num_layers} layers, {probe_result.num_heads_per_layer} heads/layer, dim={probe_result.head_dim}"
+    )
     print(f"  Top heads selected: {len(probe_result.top_heads)}")
 
     # Show top 5 heads
@@ -188,7 +190,10 @@ def run_iti(model_path: str, output_dir: str) -> str:
         "probing_dataset": "truthful_qa",
         "num_probing_samples": 500,
     }
-    probe_path = Path(output_dir) / "iti_probe_results.json"
+    # Sanitize output_dir to prevent path traversal
+    safe_output = Path(output_dir).resolve()
+    probe_path = safe_output / "iti_probe_results.json"
+    safe_output.mkdir(parents=True, exist_ok=True)
     with open(probe_path, "w") as f:
         json.dump(probe_info, f, indent=2)
     print(f"  Probe results saved: {probe_path}")
@@ -210,7 +215,7 @@ def run_gguf_export(model_path: str, output_dir: str) -> None:
 
     print(f"Model:        {model_path}")
     print(f"Output:       {gguf_path}")
-    print(f"Quantization: Q4_K_M")
+    print("Quantization: Q4_K_M")
     print()
 
     start = time.time()
@@ -246,7 +251,7 @@ def run_eval_iti_model(iti_model_path: str, output_dir: str) -> dict | None:
     tasks = ["truthfulqa_mc2"]
 
     print(f"Model:  {iti_model_path}")
-    print(f"Task:   TruthfulQA MC2 (measuring ITI impact)")
+    print("Task:   TruthfulQA MC2 (measuring ITI impact)")
     print()
 
     start = time.time()
@@ -333,6 +338,7 @@ def main():
         except Exception as e:
             print(f"\n  Evaluation FAILED: {e}")
             import traceback
+
             traceback.print_exc()
     else:
         print("\n[SKIP] Evaluation benchmarks")
@@ -345,6 +351,7 @@ def main():
         except Exception as e:
             print(f"\n  ITI FAILED: {e}")
             import traceback
+
             traceback.print_exc()
     else:
         print("\n[SKIP] ITI probing/baking")
@@ -357,6 +364,7 @@ def main():
         except Exception as e:
             print(f"\n  GGUF export FAILED: {e}")
             import traceback
+
             traceback.print_exc()
     else:
         print("\n[SKIP] GGUF export")
@@ -371,10 +379,13 @@ def main():
                 iti_tqa = iti_eval.get("truthfulqa_mc2", {}).get("score")
                 if base_tqa is not None and iti_tqa is not None:
                     delta = iti_tqa - base_tqa
-                    print(f"\n  TruthfulQA improvement from ITI: {delta:+.4f} ({base_tqa:.4f} -> {iti_tqa:.4f})")
+                    print(
+                        f"\n  TruthfulQA improvement from ITI: {delta:+.4f} ({base_tqa:.4f} -> {iti_tqa:.4f})"
+                    )
         except Exception as e:
             print(f"\n  ITI evaluation FAILED: {e}")
             import traceback
+
             traceback.print_exc()
 
     # Summary
@@ -386,7 +397,7 @@ def main():
     print(f"  Finished:   {time.strftime('%Y-%m-%d %H:%M:%S')}")
 
     # List output artifacts
-    print(f"\n  Output artifacts:")
+    print("\n  Output artifacts:")
     out_path = Path(output_dir)
     for f in sorted(out_path.iterdir()):
         if f.is_file():

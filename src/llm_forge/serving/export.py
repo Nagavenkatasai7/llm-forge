@@ -672,18 +672,21 @@ def _try_llama_cpp_subprocess(
 
     # Check common build locations if not on PATH
     if quantize_bin is None:
-        llama_dir = os.environ.get("LLAMA_CPP_DIR")
-        build_dirs = [
-            Path(llama_dir) / "build" / "bin" if llama_dir else None,
-            Path.home() / "llama.cpp" / "build" / "bin",
-            Path("/opt/llama.cpp/build/bin"),
-        ]
-        for d in build_dirs:
-            if d is None:
-                continue
+        llama_dir = os.environ.get("LLAMA_CPP_DIR", "")
+        # Validate env var is a reasonable path (no shell injection)
+        safe_build_dirs: list[Path] = []
+        if llama_dir and "/" in llama_dir and ".." not in llama_dir:
+            safe_build_dirs.append(Path(llama_dir).resolve() / "build" / "bin")
+        safe_build_dirs.extend(
+            [
+                Path.home() / "llama.cpp" / "build" / "bin",
+                Path("/opt/llama.cpp/build/bin"),
+            ]
+        )
+        for d in safe_build_dirs:
             candidate = d / "llama-quantize"
             if candidate.exists():
-                quantize_bin = str(candidate)
+                quantize_bin = str(candidate.resolve())
                 break
 
     if quantize_bin is None:
@@ -694,9 +697,39 @@ def _try_llama_cpp_subprocess(
             shutil.move(str(f16_path), str(output_path))
         return True
 
-    logger.info("Quantizing GGUF: %s -> %s (%s)", f16_path, output_path, quantization)
-    result = subprocess.run(
-        [quantize_bin, str(f16_path), str(output_path), quantization.upper()],
+    # Validate the quantize binary is a real file (not a shell injection)
+    quantize_path = Path(quantize_bin).resolve()
+    if not quantize_path.is_file():
+        logger.error("Quantize binary does not exist: %s", quantize_path)
+        return False
+
+    # Validate quantization type is a known safe value
+    valid_quant_types = {
+        "Q4_0",
+        "Q4_1",
+        "Q5_0",
+        "Q5_1",
+        "Q8_0",
+        "Q2_K",
+        "Q3_K_S",
+        "Q3_K_M",
+        "Q3_K_L",
+        "Q4_K_S",
+        "Q4_K_M",
+        "Q5_K_S",
+        "Q5_K_M",
+        "Q6_K",
+        "F16",
+        "F32",
+    }
+    quant_upper = quantization.upper()
+    if quant_upper not in valid_quant_types:
+        logger.error("Invalid quantization type: %s (allowed: %s)", quant_upper, valid_quant_types)
+        return False
+
+    logger.info("Quantizing GGUF: %s -> %s (%s)", f16_path, output_path, quant_upper)
+    result = subprocess.run(  # noqa: S603 — binary path validated above
+        [str(quantize_path), str(f16_path), str(output_path), quant_upper],
         capture_output=True,
         text=True,
         timeout=3600,

@@ -315,7 +315,7 @@ class EmbeddingEngine:
         dim = self._dimension or 384
         embeddings = []
         for text in texts:
-            seed = int(hashlib.md5(text.encode("utf-8")).hexdigest()[:8], 16)
+            seed = int(hashlib.sha256(text.encode("utf-8")).hexdigest()[:8], 16)
             rng = np.random.RandomState(seed)
             vec = rng.randn(dim).astype(np.float32)
             # L2 normalize
