@@ -9,6 +9,7 @@ Three-layer memory:
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import uuid
 from datetime import datetime
@@ -42,12 +43,17 @@ class MemoryManager:
         self.project_dir = Path(project_dir or ".").resolve()
         self.llmforge_dir = self.project_dir / LLMFORGE_DIR
         self.llmforge_dir.mkdir(parents=True, exist_ok=True)
+        # Restrict .llmforge/ to owner-only (contains session data & secrets)
+        self.llmforge_dir.chmod(0o700)
 
         self.db_path = self.llmforge_dir / DB_NAME
         self.session_id = str(uuid.uuid4())[:8]
         self.session_start = datetime.now()
 
         self._init_db()
+        # Restrict memory database to owner-only read/write
+        if self.db_path.exists():
+            os.chmod(self.db_path, 0o600)
         self.project_state = self._scan_project()
 
     # ------------------------------------------------------------------

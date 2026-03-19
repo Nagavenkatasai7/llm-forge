@@ -104,6 +104,30 @@ _BLOCKED_COMMAND_PATTERNS: list[re.Pattern[str]] = [
     # Block command chaining with dangerous commands
     re.compile(r"[;&|]+\s*(?:rm|sudo|shutdown|reboot|mkfs)\b"),
     re.compile(r"\b(?:rm|sudo|shutdown|reboot|mkfs)\b.*[;&|]+"),
+    # --- Additional hardening (security audit 2026-03-19) ---
+    # Block newline/carriage-return injection (VULN-01: CRITICAL)
+    re.compile(r"[\n\r]"),
+    # Block eval/exec which can decode and run arbitrary payloads (VULN-02)
+    re.compile(r"\beval\b"),
+    re.compile(r"\bexec\b"),
+    # Block piping to shell interpreters (VULN-03: HIGH)
+    re.compile(r"\|\s*(?:sh|bash|zsh|dash|ksh|csh|tcsh|fish|python[23]?|perl|ruby|node)\b"),
+    # Block curl/wget piped to shell (VULN-04: HIGH)
+    re.compile(r"\b(?:curl|wget)\b.*\|\s*(?:sh|bash|zsh|python)"),
+    # Block environment variable exfiltration of secrets (VULN-19/20: HIGH)
+    re.compile(r"\b(?:env|printenv|set)\s*$", re.MULTILINE),
+    re.compile(r"\b(?:env|printenv|set)\s*[|;>&]"),
+    re.compile(
+        r"\$(?:ANTHROPIC_API_KEY|OPENAI_API_KEY|API_KEY|SECRET|TOKEN|PASSWORD)", re.IGNORECASE
+    ),
+    # Block hex/octal/base64 decode tricks
+    re.compile(r"\bbase64\b.*-d"),
+    re.compile(r"\bxxd\b.*-r"),
+    # Block process substitution
+    re.compile(r"<\("),
+    re.compile(r">\("),
+    # Block here-string/here-doc abuse with dangerous commands
+    re.compile(r"<<<"),
 ]
 
 # Known malicious PyPI packages.
@@ -212,20 +236,25 @@ class PermissionSystem:
 
 
 def _is_path_allowed(path: str | Path, *, allow_home: bool = False) -> bool:
-    """Return *True* if *path* is inside the project directory (or home when allowed)."""
+    """Return *True* if *path* is inside the project directory (or home when allowed).
+
+    Uses ``Path.is_relative_to`` (Python 3.9+) instead of string-prefix
+    matching to avoid false positives when directory names share a common
+    prefix (e.g. ``/home/user/app`` vs ``/home/user/application-secret``).
+    """
     resolved = Path(path).expanduser().resolve()
     project = _resolve_project_dir()
     home = Path.home().resolve()
 
-    if str(resolved).startswith(str(project)):
+    if resolved.is_relative_to(project):
         return True
-    if allow_home and str(resolved).startswith(str(home)):
+    if allow_home and resolved.is_relative_to(home):
         return True
     # Also allow /tmp and platform temp dirs
     import tempfile
 
     tmp = Path(tempfile.gettempdir()).resolve()
-    return str(resolved).startswith(str(tmp))
+    return resolved.is_relative_to(tmp)
 
 
 def _is_binary_file(path: Path) -> bool:
@@ -285,6 +314,23 @@ def run_command(
             )
 
     try:
+        # Scrub sensitive environment variables before executing commands
+        # to prevent credential exfiltration (VULN-20).
+        safe_env = {
+            k: v
+            for k, v in os.environ.items()
+            if k.upper()
+            not in {
+                "ANTHROPIC_API_KEY",
+                "OPENAI_API_KEY",
+                "HF_TOKEN",
+                "HUGGING_FACE_HUB_TOKEN",
+                "AWS_SECRET_ACCESS_KEY",
+                "GITHUB_TOKEN",
+                "API_KEY",
+                "SECRET_KEY",
+            }
+        }
         result = subprocess.run(
             command,
             shell=True,
@@ -292,6 +338,7 @@ def run_command(
             text=True,
             timeout=timeout,
             cwd=str(cwd_path),
+            env=safe_env,
         )
         return json.dumps(
             {
@@ -317,6 +364,37 @@ def run_command(
 # ---------------------------------------------------------------------------
 
 
+# Sensitive file names that should never be exposed to the LLM.
+_SENSITIVE_FILE_NAMES: frozenset[str] = frozenset(
+    {
+        ".api_key",
+        ".env",
+        ".env.local",
+        ".env.production",
+        ".env.development",
+        "credentials.json",
+        ".netrc",
+        "id_rsa",
+        "id_ed25519",
+        "id_ecdsa",
+        "id_dsa",
+        ".pgpass",
+        ".my.cnf",
+    }
+)
+
+# Sensitive directory components that should be blocked from read access.
+_SENSITIVE_PATH_PARTS: frozenset[str] = frozenset(
+    {
+        ".ssh",
+        ".gnupg",
+        ".aws",
+        ".azure",
+        ".gcloud",
+    }
+)
+
+
 def read_file(path: str, max_lines: int = 500) -> str:
     """Read a file's contents securely.
 
@@ -328,6 +406,23 @@ def read_file(path: str, max_lines: int = 500) -> str:
         return json.dumps(
             {
                 "error": f"Path '{path}' is outside the allowed directories.",
+                "status": "blocked",
+            }
+        )
+
+    # Block reading of sensitive files (API keys, SSH keys, credentials)
+    if file_path.name in _SENSITIVE_FILE_NAMES:
+        return json.dumps(
+            {
+                "error": f"Access to sensitive file '{file_path.name}' is blocked.",
+                "status": "blocked",
+            }
+        )
+    # Block reading from sensitive directories
+    if any(part in _SENSITIVE_PATH_PARTS for part in file_path.parts):
+        return json.dumps(
+            {
+                "error": "Access to sensitive directory is blocked.",
                 "status": "blocked",
             }
         )
@@ -387,6 +482,11 @@ def read_file(path: str, max_lines: int = 500) -> str:
 # ---------------------------------------------------------------------------
 
 
+_MAX_WRITE_BYTES: int = 10 * 1024 * 1024  # 10 MB max write size
+
+_VALID_WRITE_MODES: frozenset[str] = frozenset({"create", "overwrite", "append"})
+
+
 def write_file(path: str, content: str, mode: str = "create") -> str:
     """Create, overwrite, or append to a file.
 
@@ -395,6 +495,15 @@ def write_file(path: str, content: str, mode: str = "create") -> str:
         overwrite - overwrite an existing file.
         append    - append to an existing file.
     """
+    # Validate mode to prevent fall-through to overwrite (VULN-14)
+    if mode not in _VALID_WRITE_MODES:
+        return json.dumps(
+            {
+                "error": f"Invalid mode '{mode}'. Must be one of: {', '.join(sorted(_VALID_WRITE_MODES))}",
+                "status": "error",
+            }
+        )
+
     file_path = Path(path).expanduser().resolve()
 
     if not _is_path_allowed(file_path, allow_home=False):
@@ -402,6 +511,25 @@ def write_file(path: str, content: str, mode: str = "create") -> str:
             {
                 "error": f"Path '{path}' is outside the project directory.",
                 "status": "blocked",
+            }
+        )
+
+    # Block writes to sensitive files (VULN-18: prevent LLM reading API keys)
+    if file_path.name in (".api_key", ".env", "credentials.json", ".netrc"):
+        return json.dumps(
+            {
+                "error": f"Cannot write to sensitive file: {file_path.name}",
+                "status": "blocked",
+            }
+        )
+
+    # Enforce maximum write size to prevent disk-fill DoS (VULN-11)
+    content_bytes = len(content.encode("utf-8"))
+    if content_bytes > _MAX_WRITE_BYTES:
+        return json.dumps(
+            {
+                "error": f"Content too large ({content_bytes} bytes, max {_MAX_WRITE_BYTES}).",
+                "status": "too_large",
             }
         )
 
@@ -454,6 +582,15 @@ def convert_document(input_path: str, output_format: str = "txt") -> str:
     ``char_count``, ``word_count``.
     """
     src = Path(input_path).expanduser().resolve()
+
+    # Security: restrict to project directory and home (VULN-09)
+    if not _is_path_allowed(src, allow_home=True):
+        return json.dumps(
+            {
+                "error": f"Path '{input_path}' is outside the allowed directories.",
+                "status": "blocked",
+            }
+        )
 
     if not src.exists():
         return json.dumps({"error": f"File not found: {input_path}", "status": "not_found"})
@@ -593,11 +730,44 @@ def install_package(package_name: str) -> str:
     # Normalise
     name = package_name.strip()
 
-    # Security: reject arbitrary URLs
+    # Security: reject arbitrary URLs and direct references (VULN-13)
     if "://" in name or name.startswith("git+"):
         return json.dumps(
             {
                 "error": "Only PyPI package names are allowed (no URLs).",
+                "status": "blocked",
+            }
+        )
+    # Block PEP 440 direct references (package @ URL) and local paths
+    if "@" in name:
+        return json.dumps(
+            {
+                "error": "Direct references (@ notation) are not allowed.",
+                "status": "blocked",
+            }
+        )
+    # Block local file paths
+    if name.startswith(("/", "./", "../", "~", "\\")):
+        return json.dumps(
+            {
+                "error": "Local file paths are not allowed. Use PyPI package names only.",
+                "status": "blocked",
+            }
+        )
+    # Block pip flags embedded in the package name (e.g. "--index-url evil.com pkg")
+    if name.startswith("-") or " -" in name:
+        return json.dumps(
+            {
+                "error": "Package names cannot contain pip flags.",
+                "status": "blocked",
+            }
+        )
+    # Only allow valid PyPI package name characters (PEP 508)
+    base_name_match = re.match(r"^[a-zA-Z0-9]([a-zA-Z0-9._-]*[a-zA-Z0-9])?", name)
+    if not base_name_match:
+        return json.dumps(
+            {
+                "error": f"Invalid package name: {name}",
                 "status": "blocked",
             }
         )
@@ -666,6 +836,47 @@ def install_package(package_name: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# SSRF-safe redirect handler (security audit 2026-03-19)
+# ---------------------------------------------------------------------------
+
+
+class _SSRFSafeRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Redirect handler that blocks redirects to private/loopback IPs.
+
+    Prevents SSRF attacks where a public URL redirects (302) to an internal
+    service such as ``http://169.254.169.254/`` (cloud metadata) or
+    ``http://127.0.0.1:8080/admin``.
+    """
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        parsed = urllib.parse.urlparse(newurl)
+        redirect_hostname = parsed.hostname or ""
+
+        # Block non-http(s) scheme redirects
+        if parsed.scheme not in ("http", "https"):
+            raise urllib.error.URLError(f"Redirect to non-http scheme blocked: {parsed.scheme}")
+
+        # Block redirects to localhost aliases
+        if redirect_hostname in ("localhost", "127.0.0.1", "0.0.0.0", "::1"):
+            raise urllib.error.URLError(f"Redirect to localhost blocked: {redirect_hostname}")
+
+        # Resolve the redirect target and check for private IPs
+        try:
+            addrinfos = socket.getaddrinfo(redirect_hostname, None)
+            for _family, _type, _proto, _canonname, sockaddr in addrinfos:
+                ip_str = sockaddr[0]
+                addr = ipaddress.ip_address(ip_str)
+                if addr.is_private or addr.is_link_local or addr.is_loopback or addr.is_reserved:
+                    raise urllib.error.URLError(
+                        f"Redirect to private/reserved IP blocked: {ip_str}"
+                    )
+        except socket.gaierror:
+            raise urllib.error.URLError(f"Could not resolve redirect target: {redirect_hostname}")
+
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+# ---------------------------------------------------------------------------
 # Tool 6: fetch_url
 # ---------------------------------------------------------------------------
 
@@ -700,6 +911,7 @@ def fetch_url(url: str, output_path: str | None = None) -> str:
         )
 
     # Security: block private/link-local IPs (SSRF protection)
+    # Resolve once and validate all addresses before making the request.
     try:
         addrinfos = socket.getaddrinfo(hostname, None)
         for _family, _type, _proto, _canonname, sockaddr in addrinfos:
@@ -728,7 +940,10 @@ def fetch_url(url: str, output_path: str | None = None) -> str:
             url,
             headers={"User-Agent": "LLM-Forge/0.3 (https://github.com/llm-forge)"},
         )
-        with urllib.request.urlopen(req, timeout=30) as resp:
+        # Use a custom opener that validates redirect targets against SSRF
+        # (blocks redirects to private/loopback/link-local IPs).
+        opener = urllib.request.build_opener(_SSRFSafeRedirectHandler)
+        with opener.open(req, timeout=30) as resp:
             content_type = resp.headers.get("Content-Type", "application/octet-stream")
 
             # Check content-length header first
@@ -782,6 +997,13 @@ def fetch_url(url: str, output_path: str | None = None) -> str:
 
             if output_path:
                 out = Path(output_path).expanduser().resolve()
+                if not _is_path_allowed(out, allow_home=False):
+                    return json.dumps(
+                        {
+                            "error": f"Output path '{output_path}' is outside the project directory.",
+                            "status": "blocked",
+                        }
+                    )
                 out.parent.mkdir(parents=True, exist_ok=True)
                 out.write_text(text, encoding="utf-8")
                 saved_path = str(out)
@@ -799,6 +1021,13 @@ def fetch_url(url: str, output_path: str | None = None) -> str:
         # Non-HTML: save raw bytes
         if output_path:
             out = Path(output_path).expanduser().resolve()
+            if not _is_path_allowed(out, allow_home=False):
+                return json.dumps(
+                    {
+                        "error": f"Output path '{output_path}' is outside the project directory.",
+                        "status": "blocked",
+                    }
+                )
         else:
             import tempfile
 

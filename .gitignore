@@ -49,12 +49,21 @@ wandb/
 # Environment and secrets
 .env
 .env.*
+.env.local
+.env.production
+.env.staging
 *.key
 *.pem
 *.p12
+*.pfx
 *.secret
+*.keystore
 credentials.json
 service-account*.json
+*_rsa
+*_ecdsa
+*_ed25519
+id_dsa
 
 # HuggingFace token cache
 .cache/huggingface/token
@@ -81,8 +90,13 @@ coverage.xml
 # Benchmark results (machine-specific paths)
 hopper_benchmark/
 
-# Metrics database
+# Databases (may contain user data or metrics)
 metrics.db
+*.sqlite
+*.sqlite3
+*.db-journal
+*.db-wal
+*.db-shm
 
 # Claude project memory (personal context)
 .claude/projects/

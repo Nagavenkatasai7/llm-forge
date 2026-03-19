@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
 from llm_forge.chat.engine import ChatEngine
@@ -246,7 +247,6 @@ def _setup_api_key(engine: ChatEngine, provider: str | None) -> tuple[ChatEngine
     to disk.  The caller should persist it after the key is proven valid
     (e.g. after a successful greeting).
     """
-    import os
     from pathlib import Path
 
     llmforge_dir = Path(".llmforge")
@@ -430,7 +430,12 @@ def launch_chat(provider: str | None = None) -> None:
         )
         _print_response(greeting)
     except Exception as e:
-        _print_error(f"Error connecting to API: {e}")
+        # Sanitise error message to avoid leaking API keys in tracebacks
+        err_msg = str(e)
+        api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+        if api_key and api_key in err_msg:
+            err_msg = err_msg.replace(api_key, "sk-***REDACTED***")
+        _print_error(f"Error connecting to API: {err_msg}")
         _print_info("Falling back to free wizard. You can try again later with an API key.")
         from llm_forge.chat.wizard_fallback import launch_wizard_fallback
 

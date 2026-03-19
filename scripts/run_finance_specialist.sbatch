@@ -137,7 +137,7 @@ echo "  Start time: $(date)"
 export HF_TOKEN=$(cat "$HOME/.cache/huggingface/token" 2>/dev/null || echo "")
 export HUGGING_FACE_HUB_TOKEN="$HF_TOKEN"
 export HUGGINGFACE_HUB_TOKEN="$HF_TOKEN"
-echo "HF_TOKEN set: ${HF_TOKEN:0:8}..."
+echo "HF_TOKEN set: $([ -n \"$HF_TOKEN\" ] && echo 'yes' || echo 'no')"
 
 # Run the full 12-stage DAG pipeline
 cd "$PROJECT_DIR"
