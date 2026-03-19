@@ -150,8 +150,12 @@ class TestStageSelection:
         """Train --help should show --stages and --skip-stages options."""
         result = cli_runner.invoke(app, ["train", "--help"])
         assert result.exit_code == 0
-        assert "--stages" in result.output
-        assert "--skip-stages" in result.output
+        # Strip ANSI escape codes before checking (Rich adds formatting)
+        import re
+
+        plain = re.sub(r"\x1b\[[0-9;]*m", "", result.output)
+        assert "--stages" in plain
+        assert "--skip-stages" in plain
 
     def test_stages_and_skip_mutually_exclusive(
         self, cli_runner: CliRunner, tmp_path: Path
