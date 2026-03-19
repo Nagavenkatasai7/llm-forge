@@ -6,60 +6,93 @@
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-green.svg)](https://opensource.org/licenses/Apache-2.0)
 [![CI](https://github.com/Nagavenkatasai7/llm-forge/actions/workflows/ci.yml/badge.svg)](https://github.com/Nagavenkatasai7/llm-forge/actions)
 
-llm-forge lets you fine-tune large language models by editing a single YAML file and dropping in your dataset. One config file controls everything: data cleaning, training, evaluation, and serving.
+llm-forge is a conversational AI assistant that helps you build custom language models. Just type `llm-forge` and tell it what you want — it handles everything: data cleaning, training, evaluation, and deployment.
 
-## Clone and Run (5 Minutes)
-
-No config editing needed. Copy-paste these commands to train your first model:
+## Install (One Command)
 
 ```bash
-# 1. Clone and install
-git clone https://github.com/Nagavenkatasai7/llm-forge.git
-cd llm-forge
-pip install -e ".[all]"
-
-# 2. Login to HuggingFace (one-time, for downloading models)
-huggingface-cli login
-
-# 3. Train Llama-3.2-1B on Alpaca dataset (~30 min on GPU)
-llm-forge train --config configs/demo_lora_llama.yaml --verbose
-
-# 4. Chat with your fine-tuned model
-llm-forge serve --config configs/demo_lora_llama.yaml \
-  --model-path outputs/demo-lora-llama3.2-1b/merged
+curl -fsSL https://raw.githubusercontent.com/Nagavenkatasai7/llm-forge/main/install.sh | bash
 ```
 
-Your fine-tuned model appears in `outputs/`. Chat UI opens at `http://localhost:7860`.
-
-**No GPU? Test on CPU in 5 minutes:**
+Then open a new terminal (or run `source ~/.zshrc`) and type:
 
 ```bash
-# Uses a tiny 135M model and 10 sample records (included in repo)
-llm-forge train --config configs/quickstart_tiny.yaml --verbose
+llm-forge
 ```
+
+That's it. LLM Forge will guide you through building your AI model.
+
+**Already have Python 3.10+?** You can also install directly:
+
+```bash
+pip install llm-forge-new
+llm-forge
+```
+
+## What Happens When You Run It
+
+```
+$ llm-forge
+
+╭─ LLM Forge — Build your own AI model ─╮
+│  Just tell me what you want to build.  │
+╰────────────────────────────────────────╯
+
+You: I want to build a customer support chatbot
+
+Forge: I'll set that up. Let me check your hardware...
+       Found: NVIDIA RTX 4090 (24 GB VRAM)
+
+       I recommend Llama-3.2-1B with LoRA fine-tuning.
+       Where is your training data?
+
+You: ~/data/support_tickets.jsonl
+
+Forge: Found 2,400 records in Alpaca format.
+       Config saved. Starting training...
+       ████████████░░░░░░  Step 142/300  loss: 1.42  ETA: 8 min
+```
+
+LLM Forge works as a conversational manager — you talk to it, it takes action. No YAML editing, no CLI commands to memorize.
+
+**No API key?** LLM Forge includes a free guided wizard that works offline — no API needed.
+
+**Want the full AI-powered experience?** Set a Claude API key:
+
+```bash
+export ANTHROPIC_API_KEY=your-key-here
+llm-forge
+```
+
+## Quick Demo (5 Minutes, No Config)
+
+```bash
+llm-forge demo
+```
+
+Trains a tiny 135M model on bundled sample data. Works on CPU. Zero configuration.
 
 ## Prerequisites
 
-Before installing, make sure you have:
-
-- **Python 3.10-3.12** (`python --version`)
-- **NVIDIA GPU with 8+ GB VRAM** (`nvidia-smi`) - or CPU for testing
-- **Git** (`git --version`)
+- **Python 3.10+** (the installer handles this)
+- **NVIDIA GPU with 8+ GB VRAM** (recommended) or CPU for testing
 - **20 GB free disk space**
-- **HuggingFace account** ([free signup](https://huggingface.co/join)) - needed for gated models like Llama
 
-No GPU? You can still test with `mode: "qlora"` on CPU (slow but works), or use a free GPU on [Google Colab](https://colab.research.google.com).
+No GPU? You can test on CPU with small models, or use [Google Colab](https://colab.research.google.com) for free GPU access.
 
-## Installation
+## Installation Options
 
 ```bash
-# From source (recommended)
+# Option 1: One-line installer (recommended — handles everything)
+curl -fsSL https://raw.githubusercontent.com/Nagavenkatasai7/llm-forge/main/install.sh | bash
+
+# Option 2: pip install (if you have Python 3.10+)
+pip install llm-forge-new
+
+# Option 3: From source (for development)
 git clone https://github.com/Nagavenkatasai7/llm-forge.git
 cd llm-forge
 pip install -e ".[all]"
-
-# Or from PyPI
-pip install llm-forge[all]
 ```
 
 ## How It Works
