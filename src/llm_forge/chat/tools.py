@@ -286,6 +286,98 @@ TOOLS = [
             "required": ["model_path"],
         },
     },
+    # ----- Memory tools (handled by ChatEngine, not execute_tool) -----
+    {
+        "name": "save_memory",
+        "description": "Save an important insight about the user, their project, or a training lesson to long-term memory. Call this proactively when you learn something worth remembering across sessions. Categories: user_preference, project_decision, training_lesson, user_behavior.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "category": {
+                    "type": "string",
+                    "enum": [
+                        "user_preference",
+                        "project_decision",
+                        "training_lesson",
+                        "user_behavior",
+                    ],
+                    "description": "Memory category",
+                },
+                "content": {
+                    "type": "string",
+                    "description": "What to remember (be specific and concise)",
+                },
+                "relevance": {
+                    "type": "number",
+                    "description": "How important this is (0.0 to 1.0, default 1.0)",
+                    "default": 1.0,
+                },
+            },
+            "required": ["category", "content"],
+        },
+    },
+    {
+        "name": "recall_memory",
+        "description": "Search your long-term memory for past insights, decisions, or lessons. Use this when the user references past work or when you need context from previous sessions.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Search query (keyword or topic)",
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Max results to return (default: 10)",
+                    "default": 10,
+                },
+            },
+            "required": ["query"],
+        },
+    },
+    {
+        "name": "get_project_state",
+        "description": "Get the current state of the project directory: configs, trained models, data files, active training. Use at session start to understand what the user has.",
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+        },
+    },
+    {
+        "name": "get_session_history",
+        "description": "Get summaries of past conversation sessions. Use when the user wants to resume previous work or references something from a past session.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "limit": {
+                    "type": "integer",
+                    "description": "Number of recent sessions to retrieve (default: 5)",
+                    "default": 5,
+                },
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "log_training_run",
+        "description": "Record a training run's details and outcome in persistent history. Call after training starts or completes.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "config_path": {"type": "string", "description": "Config file used"},
+                "model_name": {"type": "string", "description": "Name of the trained model"},
+                "base_model": {"type": "string", "description": "Base model used"},
+                "mode": {"type": "string", "description": "Training mode (lora, qlora, full)"},
+                "output_dir": {"type": "string", "description": "Output directory"},
+                "final_loss": {"type": "number", "description": "Final training loss"},
+                "eval_loss": {"type": "number", "description": "Evaluation loss"},
+                "status": {"type": "string", "description": "started, completed, or failed"},
+                "notes": {"type": "string", "description": "Any notes about this run"},
+            },
+            "required": ["config_path", "model_name", "base_model", "mode", "output_dir"],
+        },
+    },
 ]
 
 

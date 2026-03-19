@@ -62,10 +62,10 @@ def _get_input() -> str:
 
 
 def launch_chat(provider: str | None = None) -> None:
-    """Launch the interactive chat session."""
+    """Launch the interactive chat session with memory."""
     _print_banner()
 
-    engine = ChatEngine(provider=provider)
+    engine = ChatEngine(provider=provider, project_dir=".")
 
     # Check for API key
     if engine.provider == "none":
@@ -83,14 +83,42 @@ def launch_chat(provider: str | None = None) -> None:
         except ImportError:
             print("No API key found.")
             print("Set ANTHROPIC_API_KEY or OPENAI_API_KEY environment variable.")
-            print("Get a Claude API key at: https://console.anthropic.com/")
         return
 
-    # Send initial greeting
+    # Show memory status
+    try:
+        from rich.console import Console
+
+        console = Console()
+        session_count = 0
+        memory_count = 0
+        try:
+            import sqlite3
+
+            conn = sqlite3.connect(str(engine.memory.db_path))
+            session_count = conn.execute(
+                "SELECT COUNT(*) FROM sessions WHERE summary IS NOT NULL"
+            ).fetchone()[0]
+            memory_count = conn.execute("SELECT COUNT(*) FROM memories").fetchone()[0]
+            conn.close()
+        except Exception:
+            pass
+
+        if session_count > 0 or memory_count > 0:
+            console.print(
+                f"[dim]Memory loaded: {session_count} past session(s), "
+                f"{memory_count} stored insight(s)[/dim]\n"
+            )
+    except ImportError:
+        pass
+
+    # Send initial greeting — tells Claude to check project state and memories
     try:
         greeting = engine.send(
-            "The user just launched llm-forge. Greet them warmly and ask what kind of AI model "
-            "they want to build. Keep it to 2-3 sentences. Also detect their hardware."
+            "The user just launched llm-forge. Check the project state and session history. "
+            "If there's past work, welcome them back with context. If new user, "
+            "greet them warmly and ask what kind of AI model they want to build. "
+            "Also detect hardware if not already in memory. Keep it to 3-4 sentences."
         )
         _print_response(greeting)
     except Exception as e:
@@ -107,19 +135,14 @@ def launch_chat(provider: str | None = None) -> None:
         try:
             user_input = _get_input()
         except (KeyboardInterrupt, EOFError):
-            print("\nGoodbye!")
+            _shutdown(engine)
             break
 
         if not user_input.strip():
             continue
 
         if user_input.strip().lower() in ("quit", "exit", "q", "bye"):
-            try:
-                from rich.console import Console
-
-                Console().print("\n[cyan]Thanks for using LLM Forge! Happy training![/cyan]\n")
-            except ImportError:
-                print("\nThanks for using LLM Forge! Happy training!\n")
+            _shutdown(engine)
             break
 
         try:
@@ -135,3 +158,18 @@ def launch_chat(provider: str | None = None) -> None:
                 Console().print(f"[red]Error:[/red] {e}")
             except ImportError:
                 print(f"Error: {e}")
+
+
+def _shutdown(engine: ChatEngine) -> None:
+    """Graceful shutdown: save session memory."""
+    try:
+        engine.end_session()
+    except Exception:
+        pass
+
+    try:
+        from rich.console import Console
+
+        Console().print("\n[cyan]Session saved. See you next time![/cyan]\n")
+    except ImportError:
+        print("\nSession saved. See you next time!\n")
