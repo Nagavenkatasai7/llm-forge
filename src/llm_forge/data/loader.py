@@ -5,6 +5,8 @@ from __future__ import annotations
 import contextlib
 import json
 import logging
+import platform
+import signal
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -118,16 +120,44 @@ class DataLoader:
         dataset = Dataset.from_list(all_records)
         return self._apply_limits(dataset)
 
+    def _load_with_timeout(self, dataset_name: str, **kwargs: Any) -> Dataset | DatasetDict:
+        """Load dataset with timeout protection.
+
+        Uses SIGALRM on Unix to abort loads that hang longer than 30 minutes.
+        On Windows, falls back to a plain ``load_dataset`` call (no timeout).
+        """
+        timeout = 1800  # 30 minutes max for dataset loading
+
+        def _timeout_handler(signum: int, frame: Any) -> None:
+            raise TimeoutError(
+                f"Dataset loading timed out after {timeout}s. "
+                f"Try: streaming=True in your config, or download the dataset manually."
+            )
+
+        if platform.system() != "Windows":
+            old_handler = signal.signal(signal.SIGALRM, _timeout_handler)
+            signal.alarm(timeout)
+            try:
+                result = load_dataset(dataset_name, **kwargs)
+            finally:
+                signal.alarm(0)
+                signal.signal(signal.SIGALRM, old_handler)
+            return result
+        else:
+            return load_dataset(dataset_name, **kwargs)
+
     def _load_from_huggingface(self, dataset_name: str) -> Dataset:
         """Load a dataset from HuggingFace Hub."""
         logger.info(f"Loading HuggingFace dataset: {dataset_name}")
 
         try:
-            ds = load_dataset(
+            ds = self._load_with_timeout(
                 dataset_name,
                 streaming=self.streaming,
                 num_proc=self.num_workers if not self.streaming else None,
             )
+        except TimeoutError:
+            raise
         except Exception as e:
             raise ValueError(
                 f"Failed to load '{dataset_name}'. "

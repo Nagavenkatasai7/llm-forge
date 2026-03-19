@@ -448,6 +448,44 @@ class DataConfig(BaseModel):
         description="Data-cleaning sub-configuration.",
     )
 
+    @model_validator(mode="after")
+    def _validate_paths(self) -> DataConfig:
+        """Warn if local file paths don't exist on disk.
+
+        HuggingFace dataset IDs (e.g. ``tatsu-lab/alpaca``) look like
+        paths but should not be validated as local files.  We only warn
+        for values that clearly reference the local filesystem: starting
+        with ``./``, ``/``, ``~``, or containing no ``/`` at all but
+        having a file-like extension.
+        """
+        import warnings
+        from pathlib import Path
+
+        for field_name in ("train_path", "eval_path"):
+            value = getattr(self, field_name)
+            if value is None:
+                continue
+            # Skip URLs
+            if value.startswith(("http://", "https://", "hf://")):
+                continue
+            # Heuristic: if the first path component contains no "/",
+            # it could be a HF dataset ID like "tatsu-lab/alpaca".
+            # Only warn for paths that look local.
+            _looks_local = value.startswith((".", "/", "~")) or (
+                "/" not in value and "." in value.rsplit("/", 1)[-1]
+            )
+            if not _looks_local:
+                continue
+            p = Path(value).expanduser()
+            if not p.exists():
+                warnings.warn(
+                    f"{field_name} '{value}' not found at {p.resolve()}. "
+                    f"Training will fail unless this is a HuggingFace dataset ID.",
+                    UserWarning,
+                    stacklevel=2,
+                )
+        return self
+
 
 # ---------------------------------------------------------------------------
 # Sub-config: Training

@@ -60,6 +60,68 @@ _STATUS_COMPLETED = "completed"
 _STATUS_FAILED = "failed"
 _STATUS_SKIPPED = "skipped"
 
+# ---------------------------------------------------------------------------
+# Error recovery suggestion map
+# ---------------------------------------------------------------------------
+
+_RECOVERY_HINTS: dict[str, list[str]] = {
+    "CUDA out of memory": [
+        "Reduce per_device_train_batch_size (try 1 or 2)",
+        "Enable gradient_checkpointing: true",
+        "Switch to mode: qlora for 4-bit training",
+        "Reduce max_seq_length (try 512 or 1024)",
+    ],
+    "No module named": [
+        "Install missing package: pip install <package_name>",
+        "Or install all dependencies: pip install llm-forge[all]",
+    ],
+    "Unable to load model": [
+        "Check model name is correct on HuggingFace Hub",
+        "Try adding trust_remote_code: true to model config",
+        "Check your internet connection for model download",
+    ],
+    "NaN": [
+        "Reduce learning_rate (try 1e-5)",
+        "Check your training data for empty or corrupt samples",
+        "Disable neftune_noise_alpha (set to null)",
+    ],
+    "expected scalar": [
+        "Your tokenizer may be missing a pad_token",
+        "Try a different model or add pad_token manually",
+    ],
+    "out of memory": [
+        "Reduce per_device_train_batch_size (try 1 or 2)",
+        "Enable gradient_checkpointing: true",
+        "Switch to mode: qlora for 4-bit training",
+        "Reduce max_seq_length (try 512 or 1024)",
+    ],
+    "Connection error": [
+        "Check your internet connection",
+        "If behind a proxy, set HTTPS_PROXY environment variable",
+        "Try downloading the model/dataset manually first",
+    ],
+    "Permission denied": [
+        "Check file/directory permissions on the output path",
+        "Ensure the output directory is writable",
+        "Try running with a different output_dir",
+    ],
+    "Tokenizer": [
+        "Ensure the tokenizer matches the model",
+        "Try adding trust_remote_code: true",
+        "Check if the model repo has a tokenizer_config.json",
+    ],
+}
+
+
+def _suggest_recovery(error_msg: str) -> list[str]:
+    """Return recovery suggestions based on the error message."""
+    suggestions: list[str] = []
+    error_lower = error_msg.lower()
+    for pattern, hints in _RECOVERY_HINTS.items():
+        if pattern.lower() in error_lower:
+            suggestions.extend(hints)
+    return suggestions or ["Check the full error log above", "Try: llm-forge doctor"]
+
 
 class _StageStatus:
     """Track execution status for a single pipeline stage."""
@@ -245,12 +307,21 @@ class PipelineRunner:
                 )
                 logger.debug(traceback.format_exc())
 
+                # Suggest recovery actions based on error message
+                suggestions = _suggest_recovery(str(exc))
+                if suggestions:
+                    logger.error("Recovery suggestions:")
+                    for i, hint in enumerate(suggestions, 1):
+                        logger.error("  %d. %s", i, hint)
+
                 # Save progress checkpoint so the user can resume
                 self._save_checkpoint(config, context, statuses, stage.name)
 
+                hint_text = "\n".join(f"  - {h}" for h in suggestions)
                 raise RuntimeError(
                     f"Pipeline failed at stage '{stage.name}': {error_msg}\n"
-                    f"Resume with: PipelineRunner().run(config, resume_from='{stage.name}')"
+                    f"Resume with: PipelineRunner().run(config, resume_from='{stage.name}')\n"
+                    f"Recovery suggestions:\n{hint_text}"
                 ) from exc
 
         # Step 8: Save final results and artifacts

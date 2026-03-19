@@ -821,20 +821,114 @@ def _start_training(config_path: str, verbose: bool = True) -> str:
     """Start training in a subprocess and attach a background monitor."""
     global _active_monitor  # noqa: PLW0603
 
+    # --- Gap 2: Resolve preset names from configs/ directory ---------------
     p = Path(config_path).expanduser()
+    if not p.exists():
+        configs_dir = Path.cwd() / "configs"
+        candidate = configs_dir / config_path
+        if candidate.exists():
+            p = candidate
+        elif (configs_dir / f"{config_path}.yaml").exists():
+            p = configs_dir / f"{config_path}.yaml"
     if not p.exists():
         return json.dumps({"status": "error", "error": f"Config not found: {p}"})
 
-    cmd = [sys.executable, "-m", "llm_forge.cli", "train", "--config", str(p)]
+    # --- Gap 1: GPU validation before training launch ----------------------
+    try:
+        hw_info = json.loads(_detect_hardware())
+        gpu_type = hw_info.get("gpu_type", "none")
+
+        # Parse config to get training mode and model name
+        import yaml
+
+        with open(p) as _cfg_f:
+            _raw_cfg = yaml.safe_load(_cfg_f) or {}
+        _training_sec = _raw_cfg.get("training", {}) if isinstance(_raw_cfg, dict) else {}
+        _model_sec = _raw_cfg.get("model", {}) if isinstance(_raw_cfg, dict) else {}
+        _mode = _training_sec.get("mode", "lora") if isinstance(_training_sec, dict) else "lora"
+        _model_name = (
+            _model_sec.get("name", "unknown") if isinstance(_model_sec, dict) else "unknown"
+        )
+
+        # Determine available VRAM
+        _vram_gb: float = 0.0
+        if gpu_type == "nvidia_cuda":
+            gpus = hw_info.get("gpus", [])
+            if gpus:
+                _vram_gb = gpus[0].get("vram_gb", 0.0)
+        elif gpu_type == "apple_mps":
+            ram_total = hw_info.get("ram_total_gb", 0)
+            _vram_gb = ram_total * 0.75 if isinstance(ram_total, (int, float)) else 8.0
+
+        # VRAM checks per training mode
+        hw_warnings: list[str] = []
+        if _mode == "qlora" and _vram_gb > 0 and _vram_gb < 6:
+            return json.dumps(
+                {
+                    "status": "error",
+                    "error": (
+                        f"Insufficient VRAM for QLoRA: {_vram_gb:.1f} GB available, "
+                        f"minimum 6 GB required. Model: {_model_name}"
+                    ),
+                }
+            )
+        elif _mode == "lora" and _vram_gb > 0 and _vram_gb < 8:
+            return json.dumps(
+                {
+                    "status": "error",
+                    "error": (
+                        f"Insufficient VRAM for LoRA: {_vram_gb:.1f} GB available, "
+                        f"minimum 8 GB required. Model: {_model_name}"
+                    ),
+                }
+            )
+        elif _mode == "full" and _vram_gb > 0 and _vram_gb < 16:
+            return json.dumps(
+                {
+                    "status": "error",
+                    "error": (
+                        f"Insufficient VRAM for full fine-tuning: {_vram_gb:.1f} GB available, "
+                        f"minimum 16 GB required. Model: {_model_name}"
+                    ),
+                }
+            )
+
+        if gpu_type == "none" and _mode != "qlora":
+            hw_warnings.append(
+                f"No GPU detected. Training in '{_mode}' mode will be very slow on CPU."
+            )
+
+        _hw_check_msg = (
+            f"Hardware check passed: gpu={gpu_type}, vram={_vram_gb:.1f}GB, "
+            f"mode={_mode}, model={_model_name}"
+        )
+        if hw_warnings:
+            _hw_check_msg += f" | warnings: {'; '.join(hw_warnings)}"
+
+    except Exception as hw_exc:
+        # Hardware check is best-effort — don't block training on detection failure
+        _hw_check_msg = f"Hardware check skipped: {hw_exc}"
+        hw_warnings = []
+
+    # --- Gap 4: Add --no-auto-optimize to prevent double optimization ------
+    cmd = [
+        sys.executable,
+        "-m",
+        "llm_forge.cli",
+        "train",
+        "--config",
+        str(p),
+        "--no-auto-optimize",
+    ]
     if verbose:
         cmd.append("--verbose")
 
     try:
-        # Start training as a subprocess
+        # --- Gap 3: Capture stderr separately for error reporting ----------
         process = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
+            stderr=subprocess.PIPE,
             text=True,
             cwd=str(Path.cwd()),
         )
@@ -847,17 +941,33 @@ def _start_training(config_path: str, verbose: bool = True) -> str:
                 break
             output_lines.append(line.rstrip())
 
+        # Check if the process already died (Gap 3)
+        if process.poll() is not None and process.returncode != 0:
+            stderr = process.stderr.read() if process.stderr else ""
+            return json.dumps(
+                {
+                    "status": "error",
+                    "error": (
+                        f"Training failed immediately "
+                        f"(exit code {process.returncode}): {stderr[-500:]}"
+                    ),
+                }
+            )
+
         # Drain remaining stdout in a background thread to prevent
         # pipe buffer from filling up and deadlocking the subprocess.
-        def _drain_stdout(pipe):
+        def _drain_pipe(pipe):
             try:
                 while pipe.readline():
                     pass
             except (OSError, ValueError):
                 pass
 
-        drain_thread = threading.Thread(target=_drain_stdout, args=(process.stdout,), daemon=True)
+        drain_thread = threading.Thread(target=_drain_pipe, args=(process.stdout,), daemon=True)
         drain_thread.start()
+        # Also drain stderr to prevent buffer deadlock
+        drain_err_thread = threading.Thread(target=_drain_pipe, args=(process.stderr,), daemon=True)
+        drain_err_thread.start()
 
         # Start a background monitor for real-time progress
         output_dir = _resolve_output_dir(p)
@@ -875,6 +985,8 @@ def _start_training(config_path: str, verbose: bool = True) -> str:
                 "config": str(p),
                 "output_dir": str(output_dir) if output_dir else None,
                 "initial_output": output_lines,
+                "hardware_check": _hw_check_msg,
+                "hardware_warnings": hw_warnings,
                 "message": "Training started! You can ask me to check the status anytime.",
             },
             indent=2,

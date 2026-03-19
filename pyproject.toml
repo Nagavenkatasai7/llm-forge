@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "llm-forge-new"
-version = "0.8.0"
+version = "0.9.0"
 description = "Config-driven, YAML-first open-source LLM training platform"
 readme = "README.md"
 license = "Apache-2.0"
@@ -180,6 +180,8 @@ filterwarnings = [
     # Our intentional schema validation warnings (OVERFITTING/FORGETTING RISK)
     "ignore:OVERFITTING RISK:UserWarning",
     "ignore:FORGETTING RISK:UserWarning",
+    # Path validation warnings (train_path/eval_path not found on disk)
+    "ignore:.*not found at.*Training will fail:UserWarning",
 ]
 
 [tool.mypy]

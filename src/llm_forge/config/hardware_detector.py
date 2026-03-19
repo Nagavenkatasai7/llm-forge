@@ -20,6 +20,9 @@ from llm_forge.config.schema import (
     PrecisionMode,
     TrainingMode,
 )
+from llm_forge.utils.logging import get_logger
+
+logger = get_logger("config.hardware_detector")
 
 # ---------------------------------------------------------------------------
 # Data structures
@@ -485,6 +488,18 @@ class _GPUClass:
 # ---------------------------------------------------------------------------
 
 
+def _log_change(field: str, old_value: object, new_value: object, hw_label: str) -> None:
+    """Log a config change only when the value actually differs."""
+    if old_value != new_value:
+        logger.info(
+            "Auto-optimize: %s %r -> %r (based on %s)",
+            field,
+            old_value,
+            new_value,
+            hw_label,
+        )
+
+
 def auto_optimize_config(
     config: LLMForgeConfig,
     profile: HardwareProfile | None = None,
@@ -513,79 +528,173 @@ def auto_optimize_config(
     # ---- Apple Silicon / MPS -----------------------------------------------
     if profile.is_mps or profile.apple_chip:
         ram_gb = profile.system_ram_gb
+        hw_label = f"{ram_gb:.0f}GB unified RAM"
+        _log_change("bf16", config.training.bf16, False, hw_label)
         config.training.bf16 = False
+        _log_change("fp16", config.training.fp16, False, hw_label)
         config.training.fp16 = False
+        _log_change("torch_dtype", config.model.torch_dtype, PrecisionMode.fp32, hw_label)
         config.model.torch_dtype = PrecisionMode.fp32
+        _log_change("attn_implementation", config.model.attn_implementation, "eager", hw_label)
         config.model.attn_implementation = "eager"
+        _log_change("distributed.enabled", config.distributed.enabled, False, hw_label)
         config.distributed.enabled = False
+        _log_change("use_unsloth", config.training.use_unsloth, False, hw_label)
         config.training.use_unsloth = False
 
         # Memory-based sizing — unified memory is shared with OS
         usable_gb = ram_gb * 0.65  # ~65% of unified RAM is safely usable
         if usable_gb >= 23:  # 36+ GB Mac
+            _log_change("batch_size", config.training.per_device_train_batch_size, 4, hw_label)
             config.training.per_device_train_batch_size = 4
+            _log_change(
+                "gradient_accumulation_steps",
+                config.training.gradient_accumulation_steps,
+                4,
+                hw_label,
+            )
             config.training.gradient_accumulation_steps = 4
+            _log_change(
+                "gradient_checkpointing",
+                config.training.gradient_checkpointing,
+                False,
+                hw_label,
+            )
             config.training.gradient_checkpointing = False
         elif usable_gb >= 10:  # 16-32 GB Mac
+            _log_change("mode", config.training.mode, TrainingMode.qlora, hw_label)
             config.training.mode = TrainingMode.qlora
             config.quantization.load_in_4bit = True
             config.quantization.bnb_4bit_quant_type = "nf4"
             config.quantization.bnb_4bit_use_double_quant = True
+            _log_change("batch_size", config.training.per_device_train_batch_size, 2, hw_label)
             config.training.per_device_train_batch_size = 2
+            _log_change(
+                "gradient_accumulation_steps",
+                config.training.gradient_accumulation_steps,
+                8,
+                hw_label,
+            )
             config.training.gradient_accumulation_steps = 8
+            _log_change(
+                "gradient_checkpointing",
+                config.training.gradient_checkpointing,
+                True,
+                hw_label,
+            )
             config.training.gradient_checkpointing = True
         else:  # 8 GB Mac
+            _log_change("mode", config.training.mode, TrainingMode.qlora, hw_label)
             config.training.mode = TrainingMode.qlora
             config.quantization.load_in_4bit = True
             config.quantization.bnb_4bit_quant_type = "nf4"
             config.quantization.bnb_4bit_use_double_quant = True
+            _log_change("batch_size", config.training.per_device_train_batch_size, 1, hw_label)
             config.training.per_device_train_batch_size = 1
+            _log_change(
+                "gradient_accumulation_steps",
+                config.training.gradient_accumulation_steps,
+                16,
+                hw_label,
+            )
             config.training.gradient_accumulation_steps = 16
+            _log_change(
+                "gradient_checkpointing",
+                config.training.gradient_checkpointing,
+                True,
+                hw_label,
+            )
             config.training.gradient_checkpointing = True
-            config.model.max_seq_length = min(config.model.max_seq_length, 1024)
+            new_seq = min(config.model.max_seq_length, 1024)
+            _log_change("max_seq_length", config.model.max_seq_length, new_seq, hw_label)
+            config.model.max_seq_length = new_seq
 
-        config.data.num_workers = min(config.data.num_workers, max(1, profile.cpu_count - 2))
+        new_workers = min(config.data.num_workers, max(1, profile.cpu_count - 2))
+        _log_change("num_workers", config.data.num_workers, new_workers, hw_label)
+        config.data.num_workers = new_workers
         return config
 
     # ---- CPU-only fallback ------------------------------------------------
     if not profile.has_gpu:
+        hw_label = "CPU-only"
+        _log_change("bf16", config.training.bf16, False, hw_label)
         config.training.bf16 = False
+        _log_change("fp16", config.training.fp16, False, hw_label)
         config.training.fp16 = False
+        _log_change("torch_dtype", config.model.torch_dtype, PrecisionMode.fp32, hw_label)
         config.model.torch_dtype = PrecisionMode.fp32
+        _log_change("attn_implementation", config.model.attn_implementation, "eager", hw_label)
         config.model.attn_implementation = "eager"
+        _log_change("batch_size", config.training.per_device_train_batch_size, 1, hw_label)
         config.training.per_device_train_batch_size = 1
+        _log_change(
+            "gradient_accumulation_steps",
+            config.training.gradient_accumulation_steps,
+            8,
+            hw_label,
+        )
         config.training.gradient_accumulation_steps = 8
+        _log_change(
+            "gradient_checkpointing", config.training.gradient_checkpointing, True, hw_label
+        )
         config.training.gradient_checkpointing = True
+        _log_change("use_unsloth", config.training.use_unsloth, False, hw_label)
         config.training.use_unsloth = False
+        _log_change("distributed.enabled", config.distributed.enabled, False, hw_label)
         config.distributed.enabled = False
         if config.training.mode in (TrainingMode.full, TrainingMode.pretrain):
+            _log_change("mode", config.training.mode, TrainingMode.lora, hw_label)
             config.training.mode = TrainingMode.lora
         return config
 
     # ---- Multi-GPU --------------------------------------------------------
     if profile.has_multi_gpu:
+        hw_label = f"{profile.gpu_count}x GPU"
+        _log_change("distributed.enabled", config.distributed.enabled, True, hw_label)
         config.distributed.enabled = True
+        _log_change(
+            "distributed.num_gpus", config.distributed.num_gpus, profile.gpu_count, hw_label
+        )
         config.distributed.num_gpus = profile.gpu_count
         # If all GPUs have NVLink, prefer FSDP; else DeepSpeed
         if profile.nvlink.has_nvlink:
+            _log_change("distributed.framework", config.distributed.framework, "fsdp", hw_label)
             config.distributed.framework = "fsdp"
+            _log_change(
+                "fsdp_sharding_strategy",
+                config.distributed.fsdp_sharding_strategy,
+                "FULL_SHARD",
+                hw_label,
+            )
             config.distributed.fsdp_sharding_strategy = "FULL_SHARD"
         else:
+            _log_change(
+                "distributed.framework", config.distributed.framework, "deepspeed", hw_label
+            )
             config.distributed.framework = "deepspeed"
+            _log_change("deepspeed_stage", config.distributed.deepspeed_stage, 2, hw_label)
             config.distributed.deepspeed_stage = 2
 
     # ---- Per-GPU optimisation (use the weakest GPU as the constraint) -----
     weakest = min(profile.gpus, key=lambda g: g.vram_mb)
     gc = _GPUClass(weakest)
+    vram_gb = weakest.vram_gb
+    hw_label = f"{weakest.name} ({vram_gb:.0f}GB VRAM)"
 
     # Precision
     if weakest.supports_bf16:
+        _log_change("bf16", config.training.bf16, True, hw_label)
         config.training.bf16 = True
+        _log_change("fp16", config.training.fp16, False, hw_label)
         config.training.fp16 = False
+        _log_change("torch_dtype", config.model.torch_dtype, PrecisionMode.bf16, hw_label)
         config.model.torch_dtype = PrecisionMode.bf16
     else:
+        _log_change("bf16", config.training.bf16, False, hw_label)
         config.training.bf16 = False
+        _log_change("fp16", config.training.fp16, True, hw_label)
         config.training.fp16 = True
+        _log_change("torch_dtype", config.model.torch_dtype, PrecisionMode.fp16, hw_label)
         config.model.torch_dtype = PrecisionMode.fp16
 
     # Attention implementation: only override if the current setting
@@ -593,33 +702,68 @@ def auto_optimize_config(
     if weakest.compute_capability < (8, 0):
         # Pre-Ampere: flash_attention_2 is not supported
         if config.model.attn_implementation == "flash_attention_2":
+            _log_change("attn_implementation", "flash_attention_2", "sdpa", hw_label)
             config.model.attn_implementation = "sdpa"
 
     # ---- RTX 3090 (24 GB) -------------------------------------------------
     if gc.is_rtx_3090 or (gc.is_consumer and gc.is_mid_vram):
+        _log_change("mode", config.training.mode, TrainingMode.qlora, hw_label)
         config.training.mode = TrainingMode.qlora
         config.quantization.load_in_4bit = True
         config.quantization.bnb_4bit_quant_type = "nf4"
         config.quantization.bnb_4bit_use_double_quant = True
+        _log_change(
+            "gradient_checkpointing", config.training.gradient_checkpointing, True, hw_label
+        )
         config.training.gradient_checkpointing = True
+        _log_change("batch_size", config.training.per_device_train_batch_size, 2, hw_label)
         config.training.per_device_train_batch_size = 2
+        _log_change(
+            "gradient_accumulation_steps",
+            config.training.gradient_accumulation_steps,
+            8,
+            hw_label,
+        )
         config.training.gradient_accumulation_steps = 8
+        _log_change("optim", config.training.optim, "paged_adamw_8bit", hw_label)
         config.training.optim = "paged_adamw_8bit"
 
     # ---- RTX 4090 (24 GB) -------------------------------------------------
     elif gc.is_rtx_4090 or gc.is_rtx_5090:
         if config.training.mode not in (TrainingMode.qlora, TrainingMode.lora):
+            _log_change("mode", config.training.mode, TrainingMode.lora, hw_label)
             config.training.mode = TrainingMode.lora
+        _log_change(
+            "gradient_checkpointing", config.training.gradient_checkpointing, True, hw_label
+        )
         config.training.gradient_checkpointing = True
+        _log_change("batch_size", config.training.per_device_train_batch_size, 4, hw_label)
         config.training.per_device_train_batch_size = 4
+        _log_change(
+            "gradient_accumulation_steps",
+            config.training.gradient_accumulation_steps,
+            4,
+            hw_label,
+        )
         config.training.gradient_accumulation_steps = 4
 
     # ---- A100 40 GB -------------------------------------------------------
     elif gc.is_a100_40 or (gc.is_datacenter and gc.is_high_vram and gc.vram_gb < 50):
         if config.training.mode == TrainingMode.full:
+            _log_change("mode", config.training.mode, TrainingMode.lora, hw_label)
             config.training.mode = TrainingMode.lora
+        _log_change("batch_size", config.training.per_device_train_batch_size, 8, hw_label)
         config.training.per_device_train_batch_size = 8
+        _log_change(
+            "gradient_accumulation_steps",
+            config.training.gradient_accumulation_steps,
+            2,
+            hw_label,
+        )
         config.training.gradient_accumulation_steps = 2
+        _log_change(
+            "gradient_checkpointing", config.training.gradient_checkpointing, False, hw_label
+        )
         config.training.gradient_checkpointing = False
 
     # ---- A100 80 GB -------------------------------------------------------
@@ -627,41 +771,87 @@ def auto_optimize_config(
         gc.is_datacenter and gc.is_very_high_vram and not gc.is_h100 and not gc.is_h200
     ):
         # Full fine-tune is feasible for models up to ~7B
+        _log_change("batch_size", config.training.per_device_train_batch_size, 16, hw_label)
         config.training.per_device_train_batch_size = 16
+        _log_change(
+            "gradient_accumulation_steps",
+            config.training.gradient_accumulation_steps,
+            1,
+            hw_label,
+        )
         config.training.gradient_accumulation_steps = 1
+        _log_change(
+            "gradient_checkpointing", config.training.gradient_checkpointing, False, hw_label
+        )
         config.training.gradient_checkpointing = False
 
     # ---- H100 / H200 (80-141 GB) -----------------------------------------
     elif gc.is_h100 or gc.is_h200:
+        _log_change("batch_size", config.training.per_device_train_batch_size, 16, hw_label)
         config.training.per_device_train_batch_size = 16
+        _log_change(
+            "gradient_accumulation_steps",
+            config.training.gradient_accumulation_steps,
+            1,
+            hw_label,
+        )
         config.training.gradient_accumulation_steps = 1
+        _log_change(
+            "gradient_checkpointing", config.training.gradient_checkpointing, False, hw_label
+        )
         config.training.gradient_checkpointing = False
         # Enable FP8 for Hopper
+        _log_change("fp8_enabled", config.distributed.fp8_enabled, True, hw_label)
         config.distributed.fp8_enabled = True
+        _log_change("fp8_format", config.distributed.fp8_format, "HYBRID", hw_label)
         config.distributed.fp8_format = "HYBRID"
 
     # ---- Low VRAM fallback (< 12 GB) -------------------------------------
     elif gc.is_low_vram:
+        _log_change("mode", config.training.mode, TrainingMode.qlora, hw_label)
         config.training.mode = TrainingMode.qlora
         config.quantization.load_in_4bit = True
         config.quantization.bnb_4bit_quant_type = "nf4"
         config.quantization.bnb_4bit_use_double_quant = True
+        _log_change(
+            "gradient_checkpointing", config.training.gradient_checkpointing, True, hw_label
+        )
         config.training.gradient_checkpointing = True
+        _log_change("batch_size", config.training.per_device_train_batch_size, 1, hw_label)
         config.training.per_device_train_batch_size = 1
+        _log_change(
+            "gradient_accumulation_steps",
+            config.training.gradient_accumulation_steps,
+            16,
+            hw_label,
+        )
         config.training.gradient_accumulation_steps = 16
+        _log_change("optim", config.training.optim, "paged_adamw_8bit", hw_label)
         config.training.optim = "paged_adamw_8bit"
-        config.model.max_seq_length = min(config.model.max_seq_length, 1024)
+        new_seq = min(config.model.max_seq_length, 1024)
+        _log_change("max_seq_length", config.model.max_seq_length, new_seq, hw_label)
+        config.model.max_seq_length = new_seq
 
     # ---- Generic high-VRAM datacenter fallback ----------------------------
     elif gc.is_high_vram or gc.is_very_high_vram:
+        _log_change("batch_size", config.training.per_device_train_batch_size, 8, hw_label)
         config.training.per_device_train_batch_size = 8
+        _log_change(
+            "gradient_accumulation_steps",
+            config.training.gradient_accumulation_steps,
+            2,
+            hw_label,
+        )
         config.training.gradient_accumulation_steps = 2
 
     # ---- FP8 guard: disable if hardware doesn't support it ----------------
     if config.distributed.fp8_enabled and not weakest.supports_fp8:
+        _log_change("fp8_enabled", True, False, hw_label)
         config.distributed.fp8_enabled = False
 
     # ---- Data workers: clamp to CPU count ---------------------------------
-    config.data.num_workers = min(config.data.num_workers, max(1, profile.cpu_count - 1))
+    new_workers = min(config.data.num_workers, max(1, profile.cpu_count - 1))
+    _log_change("num_workers", config.data.num_workers, new_workers, hw_label)
+    config.data.num_workers = new_workers
 
     return config

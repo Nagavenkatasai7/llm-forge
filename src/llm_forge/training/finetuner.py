@@ -76,6 +76,39 @@ except ImportError:
 
 
 # ---------------------------------------------------------------------------
+# TRL version compatibility check
+# ---------------------------------------------------------------------------
+
+
+def _check_trl_version() -> tuple[int, int]:
+    """Check TRL version compatibility and return ``(major, minor)``.
+
+    Logs the detected version and warns if it is too old for features
+    like ``assistant_only_loss`` or ``max_length`` (renamed from
+    ``max_seq_length`` in TRL >= 0.29).
+    """
+    try:
+        import trl
+
+        version = trl.__version__
+        parts = version.split(".")
+        major, minor = int(parts[0]), int(parts[1])
+        logger.info("TRL version: %s", version)
+        if major == 0 and minor < 12:
+            logger.warning(
+                "TRL %s is old. Recommend upgrading to >=0.20 for "
+                "assistant_only_loss and chat-template pipeline support.",
+                version,
+            )
+        return (major, minor)
+    except ImportError:
+        raise ImportError("TRL is required for training. Install with: pip install trl>=0.20")
+    except Exception as e:
+        logger.warning("Could not parse TRL version: %s", e)
+        return (0, 0)
+
+
+# ---------------------------------------------------------------------------
 # Precision mapping
 # ---------------------------------------------------------------------------
 
@@ -172,7 +205,7 @@ class FineTuner:
 
         # ----- Standard loading -------------------------------------------
         # Tokenizer
-        logger.info("Loading tokenizer: %s", model_name)
+        logger.info("Step 1/3: Loading tokenizer from %s...", model_name)
         tokenizer = AutoTokenizer.from_pretrained(
             model_name,
             trust_remote_code=trust_remote_code,
@@ -189,7 +222,16 @@ class FineTuner:
             else:
                 tokenizer.pad_token = tokenizer.eos_token
                 tokenizer.pad_token_id = tokenizer.eos_token_id
+
+        # Gap 5: Final validation — ensure pad_token is never None.
+        # Some tokenizers have neither a pad_token nor an eos_token
+        # (e.g., custom or broken tokenizers). Add a synthetic <pad>.
+        if tokenizer.pad_token is None:
+            tokenizer.add_special_tokens({"pad_token": "<pad>"})
+            logger.warning("Added <pad> token to tokenizer (no pad_token or eos_token found)")
+
         tokenizer.padding_side = "right"
+        logger.info("Step 1/3: Tokenizer loaded (%d vocab size)", len(tokenizer))
 
         # Ensure chat template with {% generation %} markers exists.
         # TRL v0.20's assistant_only_loss requires {% generation %}...{% endgeneration %}
@@ -197,30 +239,42 @@ class FineTuner:
         # - Base Llama 3.x models have NO chat template → set our template
         # - Instruct variants have a template but WITHOUT generation markers → override it
         _has_llama3_tokens = "<|start_header_id|>" in tokenizer.get_vocab()
-        _needs_generation_template = (
-            _has_llama3_tokens
-            and getattr(training_cfg, "assistant_only_loss", False)
-            and (
-                not getattr(tokenizer, "chat_template", None)
-                or "{% generation %}" not in (tokenizer.chat_template or "")
-            )
+
+        # Detect model family to avoid injecting Llama-specific templates
+        # into non-Llama models (e.g., Mistral, Qwen).
+        model_name_lower = model_name.lower()
+        _is_llama = any(x in model_name_lower for x in ["llama", "unsloth"])
+        _is_mistral = "mistral" in model_name_lower
+        _is_qwen = "qwen" in model_name_lower
+
+        _needs_generation_template = getattr(training_cfg, "assistant_only_loss", False) and (
+            not getattr(tokenizer, "chat_template", None)
+            or "{% generation %}" not in (tokenizer.chat_template or "")
         )
         if _needs_generation_template:
-            tokenizer.chat_template = (
-                "{% set loop_messages = messages %}"
-                "{% for message in loop_messages %}"
-                "{% set header = '<|start_header_id|>' + message['role'] + '<|end_header_id|>\n\n' %}"
-                "{% if loop.first %}{{ bos_token + header }}{% else %}{{ header }}{% endif %}"
-                "{% if message['role'] == 'assistant' %}{% generation %}{{ message['content'] | trim }}<|eot_id|>{% endgeneration %}"
-                "{% else %}{{ message['content'] | trim }}<|eot_id|>"
-                "{% endif %}"
-                "{% endfor %}"
-                "{% if add_generation_prompt %}{{ '<|start_header_id|>assistant<|end_header_id|>\n\n' }}{% endif %}"
-            )
-            logger.info(
-                "Set Llama 3 chat template with generation markers (for assistant_only_loss)"
-            )
-        elif not getattr(tokenizer, "chat_template", None) and _has_llama3_tokens:
+            if _has_llama3_tokens and _is_llama:
+                tokenizer.chat_template = (
+                    "{% set loop_messages = messages %}"
+                    "{% for message in loop_messages %}"
+                    "{% set header = '<|start_header_id|>' + message['role'] + '<|end_header_id|>\n\n' %}"
+                    "{% if loop.first %}{{ bos_token + header }}{% else %}{{ header }}{% endif %}"
+                    "{% if message['role'] == 'assistant' %}{% generation %}{{ message['content'] | trim }}<|eot_id|>{% endgeneration %}"
+                    "{% else %}{{ message['content'] | trim }}<|eot_id|>"
+                    "{% endif %}"
+                    "{% endfor %}"
+                    "{% if add_generation_prompt %}{{ '<|start_header_id|>assistant<|end_header_id|>\n\n' }}{% endif %}"
+                )
+                logger.info(
+                    "Set Llama 3 chat template with generation markers (for assistant_only_loss)"
+                )
+            else:
+                logger.warning(
+                    "Cannot auto-inject generation markers for %s. "
+                    "Using tokenizer's built-in chat template. "
+                    "If token masking is low, manually add {%% generation %%} markers.",
+                    model_name,
+                )
+        elif not getattr(tokenizer, "chat_template", None) and _has_llama3_tokens and _is_llama:
             tokenizer.chat_template = (
                 "{% set loop_messages = messages %}"
                 "{% for message in loop_messages %}"
@@ -280,8 +334,14 @@ class FineTuner:
             logger.info("Loading model in 8-bit quantization")
 
         # ---- Load model --------------------------------------------------
-        logger.info("Loading model: %s (mode=%s)", model_name, mode)
+        logger.info("Step 2/3: Loading model from %s (mode=%s)...", model_name, mode)
+        logger.info("  This may take several minutes for large models (downloading if needed)")
         model = AutoModelForCausalLM.from_pretrained(model_name, **model_kwargs)
+
+        # Compute model size for logging
+        _param_bytes = sum(p.nelement() * p.element_size() for p in model.parameters())
+        _model_size_gb = _param_bytes / (1024**3)
+        logger.info("Step 2/3: Model loaded (%.1f GB)", _model_size_gb)
 
         # Prepare for k-bit training (QLoRA)
         if mode == "qlora" and _PEFT_AVAILABLE:
@@ -383,7 +443,7 @@ class FineTuner:
         )
 
         logger.info(
-            "Applying LoRA: r=%d, alpha=%d, dropout=%.2f, targets=%s",
+            "Step 3/3: Applying LoRA adapters (r=%d, alpha=%d, dropout=%.2f, targets=%s)...",
             lora_cfg.r,
             lora_cfg.alpha,
             lora_cfg.dropout,
@@ -393,6 +453,12 @@ class FineTuner:
         model = get_peft_model(model, peft_config)
         model.print_trainable_parameters()
 
+        # Log trainable parameter percentage
+        _total_params = sum(p.numel() for p in model.parameters())
+        _trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        _trainable_pct = 100.0 * _trainable_params / _total_params if _total_params > 0 else 0.0
+        logger.info("Step 3/3: LoRA applied (%.2f%% trainable parameters)", _trainable_pct)
+
         # Enable gradient checkpointing if requested
         if training_cfg.gradient_checkpointing:
             model.enable_input_require_grads()
@@ -400,6 +466,58 @@ class FineTuner:
         self.model = model
         self._is_peft = True
         return model
+
+    # ------------------------------------------------------------------ #
+    # Dataset validation
+    # ------------------------------------------------------------------ #
+
+    @staticmethod
+    def _validate_dataset_structure(dataset: Dataset, config: Any) -> None:
+        """Validate dataset has the expected columns and structure.
+
+        Raises
+        ------
+        ValueError
+            If the dataset structure is invalid for training.
+        """
+        columns = dataset.column_names
+
+        # Check for messages column (required for chat-style training)
+        if "messages" in columns:
+            sample = dataset[0]["messages"]
+            if not isinstance(sample, list):
+                raise ValueError(
+                    f"'messages' column must be a list of dicts, got {type(sample)}. "
+                    f"Expected format: [{{'role': 'user', 'content': '...'}}, ...]"
+                )
+            if len(sample) > 0:
+                first = sample[0]
+                if not isinstance(first, dict):
+                    raise ValueError(
+                        f"Each message must be a dict with 'role' and 'content'. Got: {type(first)}"
+                    )
+                if "role" not in first or "content" not in first:
+                    raise ValueError(
+                        f"Each message must have 'role' and 'content' keys. "
+                        f"Got keys: {list(first.keys())}"
+                    )
+
+        # Check for text column (required for completion format)
+        elif "text" in columns:
+            sample = dataset[0]["text"]
+            if not isinstance(sample, str):
+                raise ValueError(f"'text' column must be a string, got {type(sample)}")
+
+        # Check for instruction/output columns (Alpaca format)
+        elif "instruction" in columns:
+            if "output" not in columns:
+                raise ValueError("Alpaca format requires both 'instruction' and 'output' columns")
+
+        else:
+            logger.warning(
+                "Unrecognized dataset columns: %s. Expected: messages, text, or instruction/output",
+                columns,
+            )
 
     # ------------------------------------------------------------------ #
     # Training
@@ -436,9 +554,17 @@ class FineTuner:
         if not _TRL_AVAILABLE:
             raise ImportError("trl is required for training. Install with: pip install trl")
 
+        # Early TRL version check — detect mismatches before training starts
+        _check_trl_version()
+
         cfg = config or self.config
         training_cfg = cfg.training
         model_cfg = cfg.model
+
+        logger.info("Loading training data from %s...", cfg.data.train_path)
+        logger.info("Training data loaded: %d samples", len(dataset))
+        if eval_dataset is not None:
+            logger.info("Evaluation data loaded: %d samples", len(eval_dataset))
 
         # Build TrainingArguments
         training_args_dict: dict[str, Any] = {
@@ -546,16 +672,13 @@ class FineTuner:
                 attn_impl = getattr(model.config, "_attn_implementation", None)
                 if not _flash_ok and attn_impl != "flash_attention_2":
                     logger.warning(
-                        "pack_sequences=True requires flash_attention_2 for correct "
-                        "attention boundaries. FlashAttention not available — "
-                        "DISABLING packing to prevent cross-sample contamination."
+                        "pack_sequences disabled: FlashAttention2 not available. "
+                        "Install with: pip install flash-attn --no-build-isolation. "
+                        "Training will be ~2x slower without packing."
                     )
                     use_packing = False
                 else:
-                    logger.info(
-                        "Sample packing enabled with FlashAttention2 — TRL will "
-                        "concatenate short examples with proper attention masking"
-                    )
+                    logger.info("Sequence packing enabled (FlashAttention2 detected)")
             _filtered_args["packing"] = use_packing
         # Detect whether dataset has a 'messages' column (TRL chat-template
         # pipeline) or a 'text' column (legacy flat-text pipeline).  The
@@ -585,6 +708,9 @@ class FineTuner:
                 _filtered_args["dataset_text_field"] = "text"
 
         sft_config = SFTConfig(**_filtered_args)
+
+        # Validate dataset structure before building the trainer
+        self._validate_dataset_structure(dataset, cfg)
 
         # Build trainer
         trainer_kwargs: dict[str, Any] = {
@@ -619,14 +745,22 @@ class FineTuner:
                     _pct,
                 )
                 if _pct < 30 and _has_messages:
+                    raise RuntimeError(
+                        f"ABORT: Only {_pct:.1f}% of tokens are masked. This means the model "
+                        f"will train on system/user prompts (producing garbage output). "
+                        f"Fix: set assistant_only_loss: true in your config, and ensure your data "
+                        f"has a 'messages' column with role/content dicts."
+                    )
+                elif 30 <= _pct < 50 and _has_messages:
                     logger.warning(
-                        "LOW MASKING (%.1f%%): Model will train on ALL tokens "
-                        "including system/user prompts. This inflates loss and "
-                        "can cause system-prompt regurgitation. Check that "
-                        "completion_only_loss is enabled and the chat template "
-                        "is applied correctly.",
+                        "LOW MASKING (%.1f%%): Model will train on a significant "
+                        "portion of non-assistant tokens. This may cause system-prompt "
+                        "regurgitation. Consider checking that assistant_only_loss is "
+                        "enabled and the chat template is applied correctly.",
                         _pct,
                     )
+        except RuntimeError:
+            raise
         except Exception as _diag_exc:
             logger.debug("Pre-training diagnostic skipped: %s", _diag_exc)
 
