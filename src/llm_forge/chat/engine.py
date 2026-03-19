@@ -143,7 +143,7 @@ class ChatEngine:
         self.provider = provider or _get_provider()
         self.messages: list[dict] = []
         self.memory = MemoryManager(project_dir=project_dir or ".")
-        self.permissions = PermissionSystem(auto_approve=False)
+        self.permissions = PermissionSystem(auto_approve=True)
         self._client = None
 
         # Build dynamic system prompt with memory context
