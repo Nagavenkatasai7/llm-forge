@@ -49,6 +49,36 @@ def _call_anthropic(messages: list[dict], system: str, client=None) -> dict:
     return response
 
 
+def _stream_anthropic(
+    messages: list[dict], system: str, client=None, on_text=None, interrupt_check=None
+):
+    """Stream Claude API response. Calls on_text(chunk) for each text chunk.
+
+    If interrupt_check() returns True, stops streaming and returns partial response.
+    Returns the final message.
+    """
+    if client is None:
+        client = _get_anthropic_client()
+
+    with client.messages.stream(
+        model="claude-sonnet-4-5",
+        max_tokens=4096,
+        system=system,
+        tools=TOOLS,
+        messages=messages,
+    ) as stream:
+        for event in stream:
+            # Check for interrupt
+            if interrupt_check and interrupt_check():
+                break
+
+            if event.type == "content_block_delta":
+                if event.delta.type == "text_delta" and on_text:
+                    on_text(event.delta.text)
+
+        return stream.get_final_message()
+
+
 def _call_openai(messages: list[dict], system: str) -> dict:
     """Call OpenAI API with tool use (function calling)."""
     from openai import OpenAI
@@ -140,15 +170,22 @@ class ChatEngine:
             self._client = _get_anthropic_client()
         return self._client
 
-    def send(self, user_input: str) -> str:
+    def send(
+        self,
+        user_input: str,
+        on_text=None,
+        interrupt_check=None,
+    ) -> str:
         """Send a user message and get the assistant's response.
 
         Handles the full tool-use loop with memory management:
         - Checks for context compaction before each API call
         - Routes memory tools to the MemoryManager
-        - Preserves all context within the active workflow
+        - Supports streaming via on_text(chunk) callback
+        - Supports Esc interruption via interrupt_check() callback
         """
         self.messages.append({"role": "user", "content": user_input})
+        self._interrupted = False
 
         # Check if we need to compact before calling the API
         if self.memory.needs_compaction(self.messages):
@@ -156,7 +193,27 @@ class ChatEngine:
 
         while True:
             if self.provider == "anthropic":
-                response = _call_anthropic(self.messages, self.system, client=self._get_client())
+                if on_text and not interrupt_check:
+                    # Streaming without interrupt
+                    response = _stream_anthropic(
+                        self.messages,
+                        self.system,
+                        client=self._get_client(),
+                        on_text=on_text,
+                    )
+                elif on_text and interrupt_check:
+                    # Streaming with interrupt support
+                    response = _stream_anthropic(
+                        self.messages,
+                        self.system,
+                        client=self._get_client(),
+                        on_text=on_text,
+                        interrupt_check=interrupt_check,
+                    )
+                else:
+                    response = _call_anthropic(
+                        self.messages, self.system, client=self._get_client()
+                    )
                 text, tool_calls = self._parse_anthropic_response(response)
             elif self.provider == "openai":
                 response = _call_openai(self.messages, self.system)
@@ -167,6 +224,13 @@ class ChatEngine:
                     "Get a free Claude API key at: https://console.anthropic.com/\n"
                     "Or set OPENAI_API_KEY for OpenAI."
                 )
+
+            # If interrupted, save partial response and return
+            if interrupt_check and interrupt_check():
+                self._interrupted = True
+                partial = text or "[interrupted by user]"
+                self.messages.append({"role": "assistant", "content": partial})
+                return partial
 
             if not tool_calls:
                 self.messages.append({"role": "assistant", "content": text})

@@ -128,6 +128,80 @@ def _print_response(text: str) -> None:
         print(f"\nForge: {text}\n")
 
 
+def _check_esc_pressed() -> bool:
+    """Non-blocking check if Esc key was pressed."""
+    try:
+        import select
+        import sys
+        import termios
+        import tty
+
+        # Save terminal settings
+        old_settings = termios.tcgetattr(sys.stdin)
+        try:
+            tty.setcbreak(sys.stdin.fileno())
+            # Non-blocking check: is there input ready?
+            if select.select([sys.stdin], [], [], 0)[0]:
+                ch = sys.stdin.read(1)
+                if ch == "\x1b":  # Esc key
+                    return True
+        finally:
+            termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old_settings)
+    except Exception:
+        pass
+    return False
+
+
+def _stream_response(engine: ChatEngine, user_input: str) -> None:
+    """Stream the assistant's response with Esc interrupt support."""
+    interrupted = False
+    text_chunks: list[str] = []
+
+    def on_text(chunk: str) -> None:
+        """Called for each streamed text chunk."""
+        text_chunks.append(chunk)
+        try:
+            from rich.console import Console
+
+            Console().print(chunk, end="", highlight=False)
+        except ImportError:
+            print(chunk, end="", flush=True)
+
+    def interrupt_check() -> bool:
+        nonlocal interrupted
+        if interrupted:
+            return True
+        if _check_esc_pressed():
+            interrupted = True
+            return True
+        return False
+
+    # Print response header
+    try:
+        from rich.console import Console
+
+        console = Console()
+        console.print("[bold green]Forge:[/bold green] ", end="")
+    except ImportError:
+        print("Forge: ", end="")
+
+    # Stream the response
+    engine.send(user_input, on_text=on_text, interrupt_check=interrupt_check)
+
+    # End the line
+    print()
+
+    if interrupted:
+        try:
+            from rich.console import Console
+
+            Console().print("\n[dim][Esc pressed — type your next instruction][/dim]")
+        except ImportError:
+            print("\n[Esc pressed — type your next instruction]")
+
+    print()
+
+
 def _get_input() -> str:
     """Get user input with a styled prompt."""
     try:
@@ -298,7 +372,7 @@ def launch_chat(provider: str | None = None) -> None:
             print(f"Error connecting to API: {e}")
         return
 
-    # Main conversation loop
+    # Main conversation loop with streaming + Esc interrupt
     while True:
         try:
             user_input = _get_input()
@@ -314,10 +388,15 @@ def launch_chat(provider: str | None = None) -> None:
             break
 
         try:
-            response = engine.send(user_input)
-            _print_response(response)
+            _stream_response(engine, user_input)
         except KeyboardInterrupt:
-            print("\n[Interrupted]")
+            # Ctrl+C also interrupts — treat same as Esc
+            try:
+                from rich.console import Console
+
+                Console().print("\n[dim][interrupted — type your new instruction][/dim]\n")
+            except ImportError:
+                print("\n[interrupted — type your new instruction]\n")
             continue
         except Exception as e:
             try:
