@@ -11,19 +11,20 @@ permissions:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
 
 jobs:
   lint:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
-      - name: Install dependencies
-        run: |
-          pip install ruff mypy
+          python-version: "3.12"
+      - name: Install ruff
+        run: pip install ruff
       - name: Run ruff check
         run: ruff check src/ tests/
       - name: Run ruff format check
@@ -31,6 +32,7 @@ jobs:
 
   test-cpu:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     strategy:
       matrix:
         python-version: ["3.10", "3.11", "3.12"]
@@ -40,6 +42,7 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
+          cache: pip
       - name: Install dependencies
         run: |
           pip install -e ".[dev]"
@@ -49,7 +52,8 @@ jobs:
         run: |
           pytest tests/ -v --cov=llm_forge --cov-report=xml \
             --ignore=tests/test_training/test_gpu.py \
-            -m "not gpu and not slow"
+            -m "not gpu and not slow" \
+            --timeout=30
       - name: Upload coverage
         if: matrix.python-version == '3.11'
         uses: codecov/codecov-action@v5
@@ -58,13 +62,14 @@ jobs:
 
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     needs: [lint, test-cpu]
     steps:
       - uses: actions/checkout@v4
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: "3.12"
       - name: Install build tools
         run: pip install build twine
       - name: Build package
