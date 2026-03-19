@@ -10,6 +10,11 @@ import subprocess
 import sys
 from pathlib import Path
 
+from llm_forge.chat.execution import (
+    EXECUTION_TOOL_NAMES,
+    EXECUTION_TOOLS,
+    execute_execution_tool,
+)
 from llm_forge.chat.training_monitor import TrainingMonitor
 
 # ---------------------------------------------------------------------------
@@ -462,6 +467,8 @@ TOOLS = [
             "required": ["config_path", "model_name", "base_model", "mode", "output_dir"],
         },
     },
+    # ----- Execution tools (system-level, permission-gated) -----
+    *EXECUTION_TOOLS,
 ]
 
 
@@ -545,6 +552,8 @@ def execute_tool(name: str, input_data: dict) -> str:
                 mode=input_data.get("mode", "auto"),
                 include_examples=input_data.get("include_examples", True),
             )
+        elif name in EXECUTION_TOOL_NAMES:
+            return execute_execution_tool(name, input_data)
         else:
             return json.dumps({"error": f"Unknown tool: {name}"})
     except Exception as e:

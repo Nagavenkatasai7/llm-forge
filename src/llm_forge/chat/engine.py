@@ -7,8 +7,14 @@ three-layer memory system for cross-session intelligence.
 
 from __future__ import annotations
 
+import json
 import os
 
+from llm_forge.chat.execution import (
+    EXECUTION_TOOL_NAMES,
+    PermissionSystem,
+    execute_execution_tool,
+)
 from llm_forge.chat.memory import MemoryManager
 from llm_forge.chat.system_prompt import SYSTEM_PROMPT
 from llm_forge.chat.tools import TOOLS, execute_tool
@@ -137,6 +143,7 @@ class ChatEngine:
         self.provider = provider or _get_provider()
         self.messages: list[dict] = []
         self.memory = MemoryManager(project_dir=project_dir or ".")
+        self.permissions = PermissionSystem(auto_approve=False)
         self._client = None
 
         # Build dynamic system prompt with memory context
@@ -242,7 +249,12 @@ class ChatEngine:
                 self._handle_openai_tools(response, tool_calls)
 
     def _execute_tool(self, name: str, input_data: dict) -> str:
-        """Execute a tool, routing memory tools to MemoryManager."""
+        """Execute a tool, routing memory tools to MemoryManager.
+
+        Execution tools (run_command, read_file, write_file, convert_document,
+        install_package, fetch_url) are gated by the PermissionSystem before
+        being dispatched.
+        """
         # Memory-specific tools
         if name == "save_memory":
             return self.memory.save_memory(
@@ -256,13 +268,17 @@ class ChatEngine:
                 limit=input_data.get("limit", 10),
             )
         elif name == "get_project_state":
-            import json
-
             return json.dumps(self.memory.project_state, indent=2)
         elif name == "get_session_history":
             return self.memory.get_session_history(limit=input_data.get("limit", 5))
         elif name == "log_training_run":
             return self.memory.log_training_run(**input_data)
+        elif name in EXECUTION_TOOL_NAMES:
+            # Gate execution tools through the permission system
+            allowed, reason = self.permissions.check(name, input_data)
+            if not allowed:
+                return json.dumps({"status": "blocked", "reason": reason})
+            return execute_execution_tool(name, input_data)
         else:
             return execute_tool(name, input_data)
 

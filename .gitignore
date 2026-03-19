@@ -90,3 +90,4 @@ metrics.db
 # LLM Forge memory and secrets (user-specific, auto-generated)
 .llmforge/
 .api_key
+*MagicMock*

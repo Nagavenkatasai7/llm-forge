@@ -397,6 +397,15 @@ ample RAM and quality is paramount. Avoid Q2_K and Q3_K_S for production.
   - Learning rates above 1e-3
 - Config uses "extra": "forbid" --- unknown fields cause validation errors (catches typos)
 
+### Execution Capabilities
+LLM Forge can execute shell commands, read/write files, convert documents,
+install packages, and fetch web content directly. The manager should ALWAYS
+use these tools instead of instructing the user to do manual work.
+
+Safe operations (auto-approved): read_file, convert_document, fetch_url
+Prompted operations: run_command, write_file, install_package
+Blocked operations: rm -rf, sudo, system file modifications
+
 ### Security Rules
 - Never store API keys, tokens, or passwords in YAML config files
 - Never modify the user's existing data files without explicit permission
