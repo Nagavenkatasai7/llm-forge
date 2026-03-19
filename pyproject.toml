@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "llm-forge-new"
-version = "0.7.0"
+version = "0.8.0"
 description = "Config-driven, YAML-first open-source LLM training platform"
 readme = "README.md"
 license = "Apache-2.0"
@@ -54,6 +54,7 @@ rag = [
 chat = [
     "anthropic>=0.40",
     "openai>=1.50",
+    "prompt_toolkit>=3.0",
 ]
 serve = [
     "gradio>=5.0",
@@ -96,6 +97,7 @@ dev = [
     "mypy>=1.12",
     "pre-commit",
     "anthropic>=0.40",
+    "prompt_toolkit>=3.0",
 ]
 all = [
     "llm-forge-new[chat]",

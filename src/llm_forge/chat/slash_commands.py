@@ -308,6 +308,14 @@ def _cmd_model(engine: ChatEngine, args: str) -> str:
     return f"Switched to {info['name']} ({info['context']}, {info['cost']} per 1M tokens)"
 
 
+def _cmd_paste(engine: ChatEngine, args: str) -> str:
+    """Enter multi-line paste mode (type --- on a new line to submit)."""
+    # Return a special sentinel so the UI loop can handle interactive input.
+    return "__PASTE__"
+
+
+PASTE_SENTINEL = "__PASTE__"
+
 # ---------------------------------------------------------------------------
 # Command registry
 # ---------------------------------------------------------------------------
@@ -335,6 +343,10 @@ COMMANDS: dict[str, dict] = {
     "/model": {
         "description": "Show or switch Claude model (e.g. /model opus-4.6)",
         "handler": _cmd_model,
+    },
+    "/paste": {
+        "description": "Enter multi-line paste mode (--- to submit)",
+        "handler": _cmd_paste,
     },
 }
 

@@ -215,6 +215,9 @@ class ChatEngine:
         self.permissions = PermissionSystem(auto_approve=True)
         self._client = None
 
+        # Track recent tool names for context detection (model output vs instruction)
+        self._recent_tool_names: list[str] = []
+
         # Optional UI callbacks: called before/after each tool execution
         # so the UI can display progress indicators.
         self.on_tool_start: callable | None = None
@@ -266,6 +269,13 @@ class ChatEngine:
         - Supports streaming via on_text(chunk) callback
         - Supports Esc interruption via interrupt_check() callback
         """
+        from llm_forge.chat.context_detector import classify_and_wrap_input
+
+        user_input = classify_and_wrap_input(
+            user_input,
+            recent_tool_calls=self._recent_tool_names,
+            conversation_length=len(self.messages),
+        )
         self.messages.append({"role": "user", "content": user_input})
         self._interrupted = False
 
@@ -350,6 +360,11 @@ class ChatEngine:
         install_package, fetch_url) are gated by the PermissionSystem before
         being dispatched.
         """
+        # Track tool names for context detection
+        self._recent_tool_names.append(name)
+        if len(self._recent_tool_names) > 20:
+            self._recent_tool_names = self._recent_tool_names[-20:]
+
         # Notify UI callback (if registered) so it can display a progress line
         if self.on_tool_start is not None:
             try:

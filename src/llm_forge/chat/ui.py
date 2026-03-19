@@ -529,17 +529,28 @@ def _stream_response(engine: ChatEngine, user_input: str) -> None:
 
 
 # ---------------------------------------------------------------------------
-# User input
+# User input (prompt_toolkit with graceful fallback)
 # ---------------------------------------------------------------------------
+
+_input_session = None
 
 
 def _get_input() -> str:
-    """Get user input with a styled prompt."""
-    console = _get_console()
-    if console is not None:
-        console.print("[bold cyan]You:[/bold cyan] ", end="")
-        return input()
-    return input("You: ")
+    """Get user input with prompt_toolkit (or fallback to plain input).
+
+    prompt_toolkit provides bracketed-paste support, slash-command
+    completion on Tab, input history via Up/Down, and Esc+Enter for
+    explicit newlines.
+    """
+    global _input_session  # noqa: PLW0603
+    if _input_session is None:
+        from llm_forge.chat.input_handler import create_input_session
+
+        _input_session = create_input_session()
+
+    from llm_forge.chat.input_handler import get_user_input
+
+    return get_user_input(session=_input_session)
 
 
 # ---------------------------------------------------------------------------
@@ -801,6 +812,7 @@ def launch_chat(provider: str | None = None) -> None:
         if user_input.strip().startswith("/"):
             from llm_forge.chat.slash_commands import (
                 CLEAR_SENTINEL,
+                PASTE_SENTINEL,
                 QUIT_SENTINEL,
                 handle_slash_command,
             )
@@ -814,8 +826,26 @@ def launch_chat(provider: str | None = None) -> None:
                     engine.messages.clear()
                     _print_info("Conversation cleared. Memory is preserved.")
                     continue
-                _print_response(result)
-                continue
+                if result == PASTE_SENTINEL:
+                    _print_info(
+                        "Paste mode: paste your content, then type --- on a new line to submit."
+                    )
+                    lines: list[str] = []
+                    while True:
+                        try:
+                            line = input()
+                            if line.strip() == "---":
+                                break
+                            lines.append(line)
+                        except (EOFError, KeyboardInterrupt):
+                            break
+                    user_input = "\n".join(lines)
+                    if not user_input.strip():
+                        continue
+                    # Fall through to send pasted content to Claude
+                else:
+                    _print_response(result)
+                    continue
 
         try:
             _stream_response(engine, user_input)
