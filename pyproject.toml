@@ -4,11 +4,11 @@ build-backend = "hatchling.build"
 
 [project]
 name = "llm-forge-new"
-version = "0.2.0"
+version = "0.2.1"
 description = "Config-driven, YAML-first open-source LLM training platform"
 readme = "README.md"
 license = "Apache-2.0"
-requires-python = ">=3.10,<3.13"
+requires-python = ">=3.10"
 authors = [
     { name = "Naga Venkata Sai Chennu", email = "nchennu@gmu.edu" },
 ]
