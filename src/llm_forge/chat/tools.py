@@ -147,6 +147,145 @@ TOOLS = [
             "required": ["query", "search_type"],
         },
     },
+    {
+        "name": "deploy_to_ollama",
+        "description": "Deploy a trained model to Ollama for local chat. Exports to GGUF, creates a Modelfile, and runs 'ollama create'. After this, the user can chat with their model using 'ollama run <name>'.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "model_path": {
+                    "type": "string",
+                    "description": "Path to the trained/merged model directory",
+                },
+                "model_name": {
+                    "type": "string",
+                    "description": "Name for the Ollama model (e.g., 'my-finance-bot')",
+                },
+                "system_prompt": {
+                    "type": "string",
+                    "description": "System prompt for the model's personality",
+                },
+                "quantization": {
+                    "type": "string",
+                    "description": "GGUF quantization type (default: Q4_K_M)",
+                    "default": "Q4_K_M",
+                },
+            },
+            "required": ["model_path", "model_name"],
+        },
+    },
+    {
+        "name": "deploy_to_huggingface",
+        "description": "Upload a trained model to HuggingFace Hub so others can use it. Creates a model card with benchmarks and usage instructions.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "model_path": {
+                    "type": "string",
+                    "description": "Path to the trained/merged model directory",
+                },
+                "repo_name": {
+                    "type": "string",
+                    "description": "HuggingFace repo name (e.g., 'my-finance-model')",
+                },
+                "description": {
+                    "type": "string",
+                    "description": "Short description of the model",
+                },
+                "private": {
+                    "type": "boolean",
+                    "description": "Make the repo private (default: false)",
+                    "default": False,
+                },
+            },
+            "required": ["model_path", "repo_name"],
+        },
+    },
+    {
+        "name": "run_evaluation",
+        "description": "Run benchmarks on a trained model to measure its quality. Returns scores on standard benchmarks like MMLU, HellaSwag, ARC, etc.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "model_path": {
+                    "type": "string",
+                    "description": "Path to the model to evaluate",
+                },
+                "benchmarks": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Benchmarks to run (e.g., ['mmlu', 'hellaswag', 'arc_easy']). Defaults to a standard set.",
+                },
+            },
+            "required": ["model_path"],
+        },
+    },
+    {
+        "name": "download_model",
+        "description": "Download a base model from HuggingFace Hub to local storage. Use this before training when the user has chosen a model.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "model_name": {
+                    "type": "string",
+                    "description": "HuggingFace model ID (e.g., 'meta-llama/Llama-3.2-1B-Instruct')",
+                },
+                "cache_dir": {
+                    "type": "string",
+                    "description": "Where to cache the model (optional, uses HF default)",
+                },
+            },
+            "required": ["model_name"],
+        },
+    },
+    {
+        "name": "install_dependencies",
+        "description": "Check and install missing Python dependencies needed for a specific feature (training, evaluation, serving, etc.).",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "feature": {
+                    "type": "string",
+                    "enum": ["training", "evaluation", "serving", "cleaning", "rag", "chat", "all"],
+                    "description": "Which feature group to install dependencies for",
+                },
+            },
+            "required": ["feature"],
+        },
+    },
+    {
+        "name": "read_training_logs",
+        "description": "Read the latest training logs to show progress, loss values, and any errors. Use this to give the user real-time updates on training.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "output_dir": {
+                    "type": "string",
+                    "description": "Training output directory to read logs from",
+                },
+                "last_n_lines": {
+                    "type": "integer",
+                    "description": "Number of recent log lines to return (default: 30)",
+                    "default": 30,
+                },
+            },
+            "required": ["output_dir"],
+        },
+    },
+    {
+        "name": "show_model_info",
+        "description": "Show detailed information about a trained model: size, architecture, training config, and available checkpoints.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "model_path": {
+                    "type": "string",
+                    "description": "Path to the model directory",
+                },
+            },
+            "required": ["model_path"],
+        },
+    },
 ]
 
 
@@ -180,6 +319,39 @@ def execute_tool(name: str, input_data: dict) -> str:
             return _list_configs()
         elif name == "search_huggingface":
             return _search_huggingface(input_data["query"], input_data["search_type"])
+        elif name == "deploy_to_ollama":
+            return _deploy_to_ollama(
+                input_data["model_path"],
+                input_data["model_name"],
+                input_data.get("system_prompt"),
+                input_data.get("quantization", "Q4_K_M"),
+            )
+        elif name == "deploy_to_huggingface":
+            return _deploy_to_huggingface(
+                input_data["model_path"],
+                input_data["repo_name"],
+                input_data.get("description", ""),
+                input_data.get("private", False),
+            )
+        elif name == "run_evaluation":
+            return _run_evaluation(
+                input_data["model_path"],
+                input_data.get("benchmarks"),
+            )
+        elif name == "download_model":
+            return _download_model(
+                input_data["model_name"],
+                input_data.get("cache_dir"),
+            )
+        elif name == "install_dependencies":
+            return _install_dependencies(input_data["feature"])
+        elif name == "read_training_logs":
+            return _read_training_logs(
+                input_data["output_dir"],
+                input_data.get("last_n_lines", 30),
+            )
+        elif name == "show_model_info":
+            return _show_model_info(input_data["model_path"])
         else:
             return json.dumps({"error": f"Unknown tool: {name}"})
     except Exception as e:
@@ -621,3 +793,330 @@ def _search_huggingface(query: str, search_type: str) -> str:
         )
     except Exception as e:
         return json.dumps({"error": str(e)})
+
+
+# ---------------------------------------------------------------------------
+# Phase 2 tool implementations
+# ---------------------------------------------------------------------------
+
+
+def _deploy_to_ollama(
+    model_path: str,
+    model_name: str,
+    system_prompt: str | None = None,
+    quantization: str = "Q4_K_M",
+) -> str:
+    """Deploy model to Ollama: GGUF export + Modelfile + ollama create."""
+    import shutil
+
+    p = Path(model_path).expanduser()
+    if not p.exists():
+        return json.dumps({"status": "error", "error": f"Model not found: {p}"})
+
+    if not shutil.which("ollama"):
+        return json.dumps(
+            {
+                "status": "error",
+                "error": "Ollama is not installed. Install from: https://ollama.com/download",
+            }
+        )
+
+    gguf_dir = p.parent / "gguf"
+    gguf_dir.mkdir(exist_ok=True)
+    gguf_file = gguf_dir / f"{model_name}-{quantization}.gguf"
+    steps_done = []
+
+    # Find existing GGUF or note we need one
+    if not gguf_file.exists():
+        existing = list(gguf_dir.glob("*.gguf")) + list(p.parent.glob("*.gguf"))
+        if existing:
+            gguf_file = existing[0]
+            steps_done.append(f"Using existing GGUF: {gguf_file.name}")
+        else:
+            return json.dumps(
+                {
+                    "status": "needs_export",
+                    "message": "No GGUF file found. Use export_model tool first to create one.",
+                }
+            )
+    else:
+        steps_done.append(f"GGUF exists: {gguf_file.name}")
+
+    # Create Modelfile
+    sys_prompt = system_prompt or "You are a helpful AI assistant."
+    modelfile_lines = [
+        f"FROM {gguf_file}",
+        "",
+        f'SYSTEM "{sys_prompt}"',
+        "",
+        "PARAMETER temperature 0.1",
+        "PARAMETER top_k 40",
+        "PARAMETER repeat_penalty 1.1",
+        "PARAMETER num_predict 256",
+        "PARAMETER num_ctx 2048",
+        'PARAMETER stop "<|start_header_id|>"',
+        'PARAMETER stop "<|eot_id|>"',
+    ]
+    modelfile_path = gguf_dir / "Modelfile"
+    modelfile_path.write_text("\n".join(modelfile_lines) + "\n")
+    steps_done.append("Created Modelfile")
+
+    # Run ollama create
+    try:
+        result = subprocess.run(
+            ["ollama", "create", model_name, "-f", str(modelfile_path)],
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+        if result.returncode == 0:
+            steps_done.append(f"Created Ollama model: {model_name}")
+            return json.dumps(
+                {
+                    "status": "ok",
+                    "model_name": model_name,
+                    "steps": steps_done,
+                    "run_command": f"ollama run {model_name}",
+                    "message": f"Deployed! Run: ollama run {model_name}",
+                }
+            )
+        else:
+            return json.dumps(
+                {"status": "error", "steps": steps_done, "error": result.stderr[-300:]}
+            )
+    except Exception as e:
+        return json.dumps({"status": "error", "steps": steps_done, "error": str(e)})
+
+
+def _deploy_to_huggingface(
+    model_path: str, repo_name: str, description: str = "", private: bool = False
+) -> str:
+    """Upload a model to HuggingFace Hub."""
+    p = Path(model_path).expanduser()
+    if not p.exists():
+        return json.dumps({"status": "error", "error": f"Model not found: {p}"})
+
+    try:
+        from huggingface_hub import HfApi
+
+        api = HfApi()
+        user = api.whoami()["name"]
+        repo_id = f"{user}/{repo_name}"
+
+        api.create_repo(repo_id=repo_id, repo_type="model", exist_ok=True, private=private)
+        api.upload_folder(
+            folder_path=str(p),
+            repo_id=repo_id,
+            repo_type="model",
+            commit_message=f"Upload {repo_name} via LLM Forge",
+        )
+
+        url = f"https://huggingface.co/{repo_id}"
+        return json.dumps(
+            {
+                "status": "ok",
+                "repo_id": repo_id,
+                "url": url,
+                "message": f"Model uploaded to {url}",
+            }
+        )
+    except ImportError:
+        return json.dumps(
+            {"error": "huggingface_hub not installed. Run: pip install huggingface_hub"}
+        )
+    except Exception as e:
+        return json.dumps({"status": "error", "error": str(e)})
+
+
+def _run_evaluation(model_path: str, benchmarks: list[str] | None = None) -> str:
+    """Run lm-eval benchmarks on a model."""
+    p = Path(model_path).expanduser()
+    if not p.exists():
+        return json.dumps({"status": "error", "error": f"Model not found: {p}"})
+
+    if benchmarks is None:
+        benchmarks = ["hellaswag", "arc_easy", "mmlu", "truthfulqa_mc2"]
+
+    tasks = ",".join(benchmarks)
+    try:
+        cmd = [
+            sys.executable,
+            "-m",
+            "lm_eval",
+            "--model",
+            "hf",
+            "--model_args",
+            f"pretrained={p},dtype=bfloat16",
+            "--tasks",
+            tasks,
+            "--batch_size",
+            "4",
+            "--output_path",
+            str(p.parent / "eval_results"),
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
+
+        if result.returncode == 0:
+            output_lines = result.stdout.split("\n")
+            score_lines = [line for line in output_lines if "|" in line and "acc" in line.lower()]
+            return json.dumps(
+                {
+                    "status": "ok",
+                    "benchmarks": benchmarks,
+                    "output_summary": score_lines[-10:] if score_lines else output_lines[-20:],
+                    "message": "Evaluation complete!",
+                }
+            )
+        else:
+            return json.dumps({"status": "error", "error": result.stderr[-500:]})
+    except subprocess.TimeoutExpired:
+        return json.dumps({"status": "error", "error": "Evaluation timed out (>60 min)."})
+    except Exception as e:
+        return json.dumps({"status": "error", "error": str(e)})
+
+
+def _download_model(model_name: str, cache_dir: str | None = None) -> str:
+    """Download a model from HuggingFace Hub."""
+    try:
+        from huggingface_hub import snapshot_download
+
+        kwargs: dict = {"repo_id": model_name}
+        if cache_dir:
+            kwargs["cache_dir"] = cache_dir
+
+        path = snapshot_download(**kwargs)
+        return json.dumps(
+            {
+                "status": "ok",
+                "model": model_name,
+                "local_path": path,
+                "message": f"Downloaded {model_name}",
+            }
+        )
+    except ImportError:
+        return json.dumps({"error": "huggingface_hub not installed."})
+    except Exception as e:
+        return json.dumps({"status": "error", "error": str(e)})
+
+
+def _install_dependencies(feature: str) -> str:
+    """Install missing dependencies for a feature."""
+    extras_map = {
+        "training": "",
+        "evaluation": "eval",
+        "serving": "serve",
+        "cleaning": "cleaning",
+        "rag": "rag",
+        "chat": "chat",
+        "all": "all",
+    }
+
+    extra = extras_map.get(feature, feature)
+    pkg = "llm-forge-new"
+    install_cmd = f"{pkg}[{extra}]" if extra else pkg
+
+    try:
+        result = subprocess.run(
+            [sys.executable, "-m", "pip", "install", "-q", install_cmd],
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+        if result.returncode == 0:
+            return json.dumps(
+                {"status": "ok", "message": f"Dependencies for '{feature}' installed."}
+            )
+        else:
+            return json.dumps({"status": "error", "error": result.stderr[-300:]})
+    except Exception as e:
+        return json.dumps({"status": "error", "error": str(e)})
+
+
+def _read_training_logs(output_dir: str, last_n_lines: int = 30) -> str:
+    """Read recent training logs from an output directory."""
+    p = Path(output_dir).expanduser()
+    if not p.exists():
+        return json.dumps({"status": "error", "error": f"Directory not found: {p}"})
+
+    result_data: dict = {"output_dir": str(p)}
+
+    # Check trainer_state.json for metrics
+    trainer_state = p / "trainer_state.json"
+    if trainer_state.exists():
+        state = json.loads(trainer_state.read_text())
+        log_history = state.get("log_history", [])
+        recent = log_history[-5:] if len(log_history) > 5 else log_history
+        result_data["recent_metrics"] = recent
+        if log_history:
+            latest = log_history[-1]
+            result_data["current_step"] = latest.get("step", "?")
+            result_data["current_loss"] = latest.get("loss", latest.get("train_loss", "?"))
+            result_data["current_epoch"] = latest.get("epoch", "?")
+        result_data["total_logged_steps"] = len(log_history)
+
+    # Check for checkpoints
+    checkpoints = sorted(p.glob("checkpoint-*"))
+    if checkpoints:
+        result_data["checkpoints"] = [c.name for c in checkpoints[-3:]]
+        result_data["latest_checkpoint"] = str(checkpoints[-1])
+
+    # Check for final model
+    if (p / "model.safetensors").exists() or (p / "adapter_model.safetensors").exists():
+        result_data["training_complete"] = True
+        result_data["message"] = "Training is complete! Model files are saved."
+    elif checkpoints:
+        result_data["training_complete"] = False
+        result_data["message"] = f"Training in progress. {len(checkpoints)} checkpoint(s)."
+    else:
+        result_data["training_complete"] = False
+        result_data["message"] = "No training output found yet."
+
+    result_data["status"] = "ok"
+    return json.dumps(result_data, indent=2, default=str)
+
+
+def _show_model_info(model_path: str) -> str:
+    """Show information about a model."""
+    p = Path(model_path).expanduser()
+    if not p.exists():
+        return json.dumps({"status": "error", "error": f"Path not found: {p}"})
+
+    info: dict = {"path": str(p)}
+
+    config_file = p / "config.json"
+    if config_file.exists():
+        config = json.loads(config_file.read_text())
+        info["architecture"] = config.get("architectures", ["unknown"])[0]
+        info["model_type"] = config.get("model_type", "unknown")
+        info["hidden_size"] = config.get("hidden_size", "?")
+        info["num_layers"] = config.get("num_hidden_layers", "?")
+        info["vocab_size"] = config.get("vocab_size", "?")
+
+    safetensors = list(p.glob("*.safetensors"))
+    if safetensors:
+        total_size = sum(f.stat().st_size for f in safetensors)
+        info["format"] = "safetensors"
+        info["size_gb"] = round(total_size / (1024**3), 2)
+
+    gguf_dirs = [p, p.parent / "gguf"]
+    gguf_files = []
+    for d in gguf_dirs:
+        if d.exists():
+            gguf_files.extend(d.glob("*.gguf"))
+    if gguf_files:
+        info["gguf_files"] = [f.name for f in gguf_files]
+
+    info["has_tokenizer"] = (p / "tokenizer.json").exists()
+
+    if (p / "adapter_config.json").exists():
+        info["is_lora_adapter"] = True
+        ac = json.loads((p / "adapter_config.json").read_text())
+        info["lora_rank"] = ac.get("r", "?")
+        info["base_model"] = ac.get("base_model_name_or_path", "?")
+
+    checkpoints = sorted(p.glob("checkpoint-*"))
+    if checkpoints:
+        info["checkpoints"] = len(checkpoints)
+
+    info["status"] = "ok"
+    return json.dumps(info, indent=2)
