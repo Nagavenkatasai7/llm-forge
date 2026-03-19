@@ -3,10 +3,19 @@
 from __future__ import annotations
 
 import json
+import math
 import platform
+import re
 import subprocess
 import sys
 from pathlib import Path
+
+from llm_forge.chat.training_monitor import TrainingMonitor
+
+# ---------------------------------------------------------------------------
+# Active training monitor (module-level singleton)
+# ---------------------------------------------------------------------------
+_active_monitor: TrainingMonitor | None = None
 
 # ---------------------------------------------------------------------------
 # Tool Definitions (JSON schema for Claude API)
@@ -286,6 +295,41 @@ TOOLS = [
             "required": ["model_path"],
         },
     },
+    {
+        "name": "estimate_training",
+        "description": "Estimate training time, memory usage, and whether the model fits the hardware. ALWAYS call this before start_training to warn the user about potential issues.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "model_name": {
+                    "type": "string",
+                    "description": "Base model name (e.g., 'meta-llama/Llama-3.2-1B')",
+                },
+                "mode": {
+                    "type": "string",
+                    "enum": ["lora", "qlora", "full"],
+                    "description": "Training mode",
+                },
+                "num_samples": {
+                    "type": "integer",
+                    "description": "Number of training samples",
+                },
+                "num_epochs": {
+                    "type": "integer",
+                    "description": "Number of epochs",
+                },
+                "batch_size": {
+                    "type": "integer",
+                    "description": "Per-device batch size",
+                },
+                "seq_length": {
+                    "type": "integer",
+                    "description": "Max sequence length",
+                },
+            },
+            "required": ["model_name", "mode", "num_samples"],
+        },
+    },
     # ----- Memory tools (handled by ChatEngine, not execute_tool) -----
     {
         "name": "save_memory",
@@ -444,6 +488,15 @@ def execute_tool(name: str, input_data: dict) -> str:
             )
         elif name == "show_model_info":
             return _show_model_info(input_data["model_path"])
+        elif name == "estimate_training":
+            return _estimate_training(
+                model_name=input_data["model_name"],
+                mode=input_data["mode"],
+                num_samples=input_data["num_samples"],
+                num_epochs=input_data.get("num_epochs", 1),
+                batch_size=input_data.get("batch_size", 4),
+                seq_length=input_data.get("seq_length", 2048),
+            )
         else:
             return json.dumps({"error": f"Unknown tool: {name}"})
     except Exception as e:
@@ -706,7 +759,9 @@ def _validate_config(config_path: str) -> str:
 
 
 def _start_training(config_path: str, verbose: bool = True) -> str:
-    """Start training in a subprocess."""
+    """Start training in a subprocess and attach a background monitor."""
+    global _active_monitor  # noqa: PLW0603
+
     p = Path(config_path).expanduser()
     if not p.exists():
         return json.dumps({"status": "error", "error": f"Config not found: {p}"})
@@ -733,11 +788,21 @@ def _start_training(config_path: str, verbose: bool = True) -> str:
                 break
             output_lines.append(line.rstrip())
 
+        # Start a background monitor for real-time progress
+        output_dir = _resolve_output_dir(p)
+        if output_dir is not None:
+            # Stop any previous monitor
+            if _active_monitor is not None:
+                _active_monitor.stop()
+            _active_monitor = TrainingMonitor(str(output_dir))
+            _active_monitor.start()
+
         return json.dumps(
             {
                 "status": "started",
                 "pid": process.pid,
                 "config": str(p),
+                "output_dir": str(output_dir) if output_dir else None,
                 "initial_output": output_lines,
                 "message": "Training started! You can ask me to check the status anytime.",
             },
@@ -747,8 +812,33 @@ def _start_training(config_path: str, verbose: bool = True) -> str:
         return json.dumps({"status": "error", "error": str(e)})
 
 
+def _resolve_output_dir(config_path: Path) -> Path | None:
+    """Try to read the output_dir from a YAML config file."""
+    try:
+        import yaml
+
+        with open(config_path) as f:
+            raw = yaml.safe_load(f)
+        if raw and isinstance(raw, dict):
+            training = raw.get("training", {})
+            if isinstance(training, dict):
+                out = training.get("output_dir")
+                if out:
+                    return Path(out).expanduser()
+    except Exception:
+        pass
+    return None
+
+
 def _check_training_status() -> str:
-    """Check if training is running."""
+    """Check if training is running, using the background monitor when available."""
+    global _active_monitor  # noqa: PLW0603
+
+    # If an active monitor has real-time data, prefer it
+    if _active_monitor is not None and _active_monitor.is_training_active():
+        monitor_status = _active_monitor.get_status()
+        if monitor_status.get("status") == "training":
+            return json.dumps(monitor_status, indent=2)
 
     # Check for running llm-forge processes
     try:
@@ -763,15 +853,23 @@ def _check_training_status() -> str:
             if "llm_forge" in line and "train" in line and "grep" not in line
         ]
         if forge_procs:
-            return json.dumps(
-                {
-                    "status": "running",
-                    "processes": len(forge_procs),
-                    "message": "Training is in progress.",
-                }
-            )
+            # Process is running but monitor may not have data yet
+            info: dict = {
+                "status": "running",
+                "processes": len(forge_procs),
+                "message": "Training is in progress.",
+            }
+            # Attach monitor data if available (even if status != "training")
+            if _active_monitor is not None:
+                info["monitor"] = _active_monitor.get_status()
+            return json.dumps(info)
     except Exception:
         pass
+
+    # No process running — stop the monitor if it's still active
+    if _active_monitor is not None:
+        _active_monitor.stop()
+        _active_monitor = None
 
     # Check for recent output directories
     outputs_dir = Path("outputs")
@@ -1212,3 +1310,179 @@ def _show_model_info(model_path: str) -> str:
 
     info["status"] = "ok"
     return json.dumps(info, indent=2)
+
+
+# ---------------------------------------------------------------------------
+# Training estimation
+# ---------------------------------------------------------------------------
+
+
+def _parse_model_params(model_name: str) -> float:
+    """Extract approximate parameter count (in billions) from a model name.
+
+    Handles patterns like "1B", "3B", "7B", "13B", "135M", "360M", "1.5B", etc.
+    Returns the value in billions (e.g. 135M -> 0.135).
+    """
+    name_lower = model_name.lower()
+
+    # Try billions first: "1b", "3b", "7b", "1.5b", "70b"
+    m = re.search(r"(\d+(?:\.\d+)?)\s*b(?:illion)?", name_lower)
+    if m:
+        return float(m.group(1))
+
+    # Try millions: "135m", "360m"
+    m = re.search(r"(\d+(?:\.\d+)?)\s*m(?:illion)?", name_lower)
+    if m:
+        return float(m.group(1)) / 1000.0
+
+    # Fallback: guess 1B
+    return 1.0
+
+
+def _detect_available_vram() -> tuple[float, str]:
+    """Detect available VRAM in GB and device type.
+
+    Returns (vram_gb, device_type) where device_type is one of:
+    "cuda", "mps", "cpu".
+    """
+    try:
+        import torch
+
+        if torch.cuda.is_available():
+            props = torch.cuda.get_device_properties(0)
+            vram_gb = props.total_mem / (1024**3)
+            name = props.name.lower()
+            if "a100" in name or "h100" in name or "a6000" in name:
+                device_type = "a100"
+            else:
+                device_type = "consumer_gpu"
+            return round(vram_gb, 1), device_type
+        elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            # Apple Silicon — unified memory, estimate ~75% available for GPU
+            try:
+                import psutil
+
+                total_ram = psutil.virtual_memory().total / (1024**3)
+                return round(total_ram * 0.75, 1), "mps"
+            except ImportError:
+                return 8.0, "mps"
+    except ImportError:
+        pass
+
+    return 0.0, "cpu"
+
+
+def _estimate_training(
+    model_name: str,
+    mode: str,
+    num_samples: int,
+    num_epochs: int = 1,
+    batch_size: int = 4,
+    seq_length: int = 2048,
+) -> str:
+    """Estimate training time, VRAM, and feasibility.
+
+    Returns a JSON object with fits_in_memory, estimated_vram_gb,
+    available_vram_gb, estimated_time_minutes, steps_total, and
+    recommendation.
+    """
+    params_b = _parse_model_params(model_name)
+
+    # --- VRAM estimation ---
+    # Bytes per parameter for the model weights in GPU memory
+    if mode == "qlora":
+        bytes_per_param = 0.5  # 4-bit quantised
+    elif mode == "full":
+        bytes_per_param = 4.0  # fp32 master weights
+    else:  # lora — bf16 frozen weights
+        bytes_per_param = 2.0
+
+    model_vram_gb = (params_b * 1e9 * bytes_per_param) / (1024**3)
+
+    # Gradient & optimizer overhead (Adam keeps 2 extra copies of trainable params)
+    if mode == "lora":
+        # Only ~2-5% of params are trainable
+        trainable_fraction = 0.03
+    elif mode == "qlora":
+        trainable_fraction = 0.03
+    else:
+        trainable_fraction = 1.0
+
+    trainable_params_gb = (params_b * 1e9 * trainable_fraction * 4) / (1024**3)
+    # Adam states (momentum + variance): 2x the trainable params in fp32
+    optimizer_vram_gb = trainable_params_gb * 2
+
+    # Activation memory estimate (rough: proportional to batch_size * seq_length * hidden_dim)
+    # Using a simplified heuristic: ~0.5 GB per billion params per batch element
+    activation_vram_gb = params_b * batch_size * (seq_length / 2048) * 0.5
+
+    estimated_vram_gb = round(
+        model_vram_gb + trainable_params_gb + optimizer_vram_gb + activation_vram_gb,
+        1,
+    )
+
+    # --- Hardware detection ---
+    available_vram_gb, device_type = _detect_available_vram()
+
+    fits = estimated_vram_gb <= available_vram_gb if available_vram_gb > 0 else False
+
+    # --- Time estimation ---
+    steps_total = math.ceil((num_samples * num_epochs) / batch_size)
+
+    # Seconds per step by device type
+    sps_lookup = {
+        "cpu": 2.0,
+        "mps": 0.5,
+        "consumer_gpu": 0.3,
+        "a100": 0.1,
+    }
+    seconds_per_step = sps_lookup.get(device_type, 1.0)
+    # Scale by model size (baseline is 1B)
+    seconds_per_step *= max(params_b, 0.1)
+
+    estimated_time_seconds = steps_total * seconds_per_step
+    estimated_time_minutes = round(estimated_time_seconds / 60, 1)
+
+    # --- Recommendation ---
+    recommendations: list[str] = []
+    if not fits and available_vram_gb > 0:
+        if mode != "qlora":
+            recommendations.append("Switch to QLoRA mode to reduce memory by ~75%.")
+        if batch_size > 1:
+            recommendations.append(
+                f"Reduce batch_size from {batch_size} to 1 and use gradient accumulation."
+            )
+        if seq_length > 1024:
+            recommendations.append(f"Reduce seq_length from {seq_length} to 1024.")
+        if params_b > 1:
+            recommendations.append(
+                f"Consider a smaller model (e.g., 1B instead of {params_b:.1f}B)."
+            )
+    elif not fits and available_vram_gb == 0:
+        recommendations.append(
+            "No GPU detected. Training will be very slow on CPU. "
+            "Consider Google Colab or a cloud GPU."
+        )
+    else:
+        recommendations.append("Looks good! The model should fit in memory.")
+
+    result = {
+        "status": "ok",
+        "model_name": model_name,
+        "estimated_params_billion": round(params_b, 3),
+        "mode": mode,
+        "fits_in_memory": fits,
+        "estimated_vram_gb": estimated_vram_gb,
+        "available_vram_gb": available_vram_gb,
+        "device_type": device_type,
+        "steps_total": steps_total,
+        "estimated_time_minutes": estimated_time_minutes,
+        "breakdown": {
+            "model_weights_gb": round(model_vram_gb, 1),
+            "gradients_gb": round(trainable_params_gb, 1),
+            "optimizer_gb": round(optimizer_vram_gb, 1),
+            "activations_gb": round(activation_vram_gb, 1),
+        },
+        "recommendation": " ".join(recommendations),
+    }
+    return json.dumps(result, indent=2)

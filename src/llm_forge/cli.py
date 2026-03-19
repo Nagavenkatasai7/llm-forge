@@ -1772,6 +1772,153 @@ def runs_show(
 
 
 # ---------------------------------------------------------------------------
+# demo (zero-config quick-start)
+# ---------------------------------------------------------------------------
+
+
+@app.command()
+def demo(
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Enable debug logging."),
+) -> None:
+    """Train a tiny model end-to-end in ~5 minutes with zero configuration.
+
+    Downloads a 135M-parameter model, uses bundled sample data, and runs
+    a short LoRA fine-tuning loop so you can see the full pipeline in
+    action without writing a single line of YAML.
+    """
+    _setup_verbose(verbose)
+
+    # -- Banner --
+    console.print(
+        Panel(
+            Text.from_markup(
+                "[bold cyan]LLM Forge Demo[/bold cyan]\n"
+                "[dim]Training your first model in ~5 minutes[/dim]"
+            ),
+            border_style="cyan",
+            padding=(1, 2),
+        )
+    )
+
+    # -- Hardware detection --
+    hw_label = "CPU-only"
+    try:
+        from llm_forge.config.hardware_detector import detect_hardware
+
+        hw = detect_hardware()
+        if hw.gpu_count > 0:
+            gpu_names = ", ".join(g.name for g in hw.gpus) or "GPU"
+            hw_label = f"{gpu_names} (CUDA)"
+        elif hw.is_mps:
+            hw_label = hw.apple_chip or "Apple MPS"
+        else:
+            hw_label = "CPU-only"
+    except Exception:
+        pass
+
+    # -- Plan table --
+    plan_table = Table(show_header=False, expand=True, box=None, padding=(0, 2))
+    plan_table.add_column("Key", style="bold cyan")
+    plan_table.add_column("Value")
+    plan_table.add_row("Model", "HuggingFaceTB/SmolLM2-135M (135M params)")
+    plan_table.add_row("Data", "Bundled sample data (10 examples)")
+    plan_table.add_row("Mode", "LoRA (r=8, alpha=16)")
+    plan_table.add_row("Epochs", "2")
+    plan_table.add_row("Hardware", hw_label)
+    plan_table.add_row("Config", "configs/quickstart_tiny.yaml")
+    console.print(Panel(plan_table, title="[bold]What will happen[/bold]", border_style="dim"))
+
+    # -- Confirmation --
+    if not typer.confirm("Ready to start?", default=True):
+        console.print("[yellow]Aborted.[/yellow]")
+        raise typer.Exit()
+
+    # -- Resolve config path --
+    config_path = Path(__file__).resolve().parents[2] / "configs" / "quickstart_tiny.yaml"
+    if not config_path.exists():
+        # Fallback: try relative to cwd
+        config_path = Path("configs/quickstart_tiny.yaml")
+    if not config_path.exists():
+        console.print(
+            "[red]Error:[/red] Could not find configs/quickstart_tiny.yaml. "
+            "Run this command from the llm-forge project root."
+        )
+        raise typer.Exit(code=1)
+
+    # -- Load config --
+    cfg = _load_config(str(config_path))
+
+    # -- Run training --
+    console.print("\n[bold]Starting training...[/bold]\n")
+    start_time = time.time()
+
+    try:
+        from llm_forge.pipeline import PipelineRunner
+
+        runner = PipelineRunner()
+        result = runner.run(cfg, auto_optimize=True)
+    except ImportError:
+        try:
+            from llm_forge.training import Trainer
+
+            trainer = Trainer(cfg)
+            result = trainer.run()
+        except ImportError:
+            console.print(
+                "[red]Error:[/red] Training pipeline not found. "
+                "Ensure llm_forge.pipeline or llm_forge.training is implemented."
+            )
+            raise typer.Exit(code=1)
+    except KeyboardInterrupt:
+        console.print("\n[yellow]Demo interrupted by user.[/yellow]")
+        raise typer.Exit(code=130)
+    except Exception as exc:
+        console.print(f"\n[red]Training failed:[/red] {exc}")
+        if verbose:
+            console.print_exception(show_locals=True)
+        raise typer.Exit(code=1)
+
+    elapsed = time.time() - start_time
+    minutes, seconds = divmod(int(elapsed), 60)
+
+    # -- Extract final loss --
+    final_loss: float | None = None
+    if isinstance(result, dict):
+        # Try common keys the pipeline might return
+        for key in ("final_loss", "train_loss", "loss"):
+            if key in result:
+                val = result[key]
+                if isinstance(val, (int, float)):
+                    final_loss = float(val)
+                    break
+
+    loss_text = f"Final loss: {final_loss:.2f}" if final_loss is not None else "Training complete"
+
+    console.print(
+        Panel(
+            f"[bold green]Model trained![/bold green]  {loss_text}\n"
+            f"Time: {minutes}m {seconds}s\n"
+            f"Output: {cfg.training.output_dir}",
+            border_style="green",
+            padding=(1, 2),
+        )
+    )
+
+    # -- Next steps --
+    console.print(
+        Panel(
+            "[bold]Next steps:[/bold]\n"
+            f"  1. Inspect outputs:  ls {cfg.training.output_dir}\n"
+            f"  2. Serve the model:  llm-forge serve --config {config_path}\n"
+            "  3. Try your own data: llm-forge init --template lora\n"
+            "  4. Full docs:         https://github.com/Nagavenkatasai7/llm-forge",
+            border_style="dim",
+            padding=(0, 2),
+        )
+    )
+
+
+# ---------------------------------------------------------------------------
 # Entry point for direct execution
 # ---------------------------------------------------------------------------
 

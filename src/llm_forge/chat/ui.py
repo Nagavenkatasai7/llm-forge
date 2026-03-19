@@ -67,22 +67,11 @@ def launch_chat(provider: str | None = None) -> None:
 
     engine = ChatEngine(provider=provider, project_dir=".")
 
-    # Check for API key
+    # Check for API key — launch free wizard fallback if none found
     if engine.provider == "none":
-        try:
-            from rich.console import Console
+        from llm_forge.chat.wizard_fallback import launch_wizard_fallback
 
-            console = Console()
-            console.print(
-                "[yellow]No API key found.[/yellow]\n\n"
-                "To use LLM Forge, set one of these environment variables:\n\n"
-                "  [bold]export ANTHROPIC_API_KEY=your-key-here[/bold]  (recommended)\n"
-                "  [bold]export OPENAI_API_KEY=your-key-here[/bold]\n\n"
-                "Get a Claude API key at: [link]https://console.anthropic.com/[/link]\n"
-            )
-        except ImportError:
-            print("No API key found.")
-            print("Set ANTHROPIC_API_KEY or OPENAI_API_KEY environment variable.")
+        launch_wizard_fallback()
         return
 
     # Show memory status
