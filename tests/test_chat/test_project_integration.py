@@ -47,6 +47,12 @@ class TestDetectTriggersOnEmptyDir:
         """launch_chat calls detect_project_type for the current directory."""
         import os
 
+        engine_instance = MagicMock()
+        engine_instance.provider = "anthropic"
+        engine_instance.send.return_value = "Hello!"
+        engine_instance.memory = MagicMock()
+        engine_instance.memory.db_path = "/tmp/fake.db"
+
         with (
             patch("llm_forge.chat.ui.detect_project_type") as mock_detect,
             patch("llm_forge.chat.ui.get_setup_plan") as mock_plan,
@@ -55,9 +61,13 @@ class TestDetectTriggersOnEmptyDir:
             patch("llm_forge.chat.ui._print_info"),
             patch("llm_forge.chat.ui._print_setup_plan"),
             patch("llm_forge.chat.ui._print_success"),
-            patch("builtins.input", return_value="n"),
-            patch("llm_forge.chat.ui.ChatEngine") as mock_engine_cls,
             patch("llm_forge.chat.ui._print_response"),
+            patch("llm_forge.chat.ui._print_error"),
+            patch("builtins.input", return_value="n"),
+            patch("llm_forge.chat.ui.ChatEngine", return_value=engine_instance),
+            patch("llm_forge.chat.ui._setup_api_key", return_value=engine_instance),
+            patch("llm_forge.chat.ui._get_input", return_value="quit"),
+            patch("llm_forge.chat.ui._stream_response"),
             patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-test"}, clear=True),
         ):
             mock_detect.return_value = {
@@ -75,26 +85,22 @@ class TestDetectTriggersOnEmptyDir:
                 "mode": "root",
                 "total_size_estimate": 0,
             }
-            engine_instance = MagicMock()
-            engine_instance.provider = "anthropic"
-            engine_instance.send.return_value = "Hello!"
-            engine_instance.memory = MagicMock()
-            engine_instance.memory.db_path = "/tmp/fake.db"
-            mock_engine_cls.return_value = engine_instance
 
             from llm_forge.chat.ui import launch_chat
 
-            with (
-                patch("llm_forge.chat.ui._get_input", return_value="quit"),
-                patch("llm_forge.chat.ui._stream_response"),
-            ):
-                launch_chat()
+            launch_chat()
 
             mock_detect.assert_called_once_with(".")
 
     def test_scaffold_called_on_accept(self, tmp_path: Path) -> None:
         """When user answers 'y', scaffold_project is called."""
         import os
+
+        engine_instance = MagicMock()
+        engine_instance.provider = "anthropic"
+        engine_instance.send.return_value = "Hello!"
+        engine_instance.memory = MagicMock()
+        engine_instance.memory.db_path = "/tmp/fake.db"
 
         with (
             patch("llm_forge.chat.ui.detect_project_type") as mock_detect,
@@ -104,8 +110,13 @@ class TestDetectTriggersOnEmptyDir:
             patch("llm_forge.chat.ui._print_info"),
             patch("llm_forge.chat.ui._print_setup_plan"),
             patch("llm_forge.chat.ui._print_success"),
+            patch("llm_forge.chat.ui._print_response"),
+            patch("llm_forge.chat.ui._print_error"),
             patch("builtins.input", return_value="y"),
-            patch("llm_forge.chat.ui.ChatEngine") as mock_engine_cls,
+            patch("llm_forge.chat.ui.ChatEngine", return_value=engine_instance),
+            patch("llm_forge.chat.ui._setup_api_key", return_value=engine_instance),
+            patch("llm_forge.chat.ui._get_input", return_value="quit"),
+            patch("llm_forge.chat.ui._stream_response"),
             patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-test"}, clear=True),
         ):
             mock_detect.return_value = {
@@ -131,18 +142,10 @@ class TestDetectTriggersOnEmptyDir:
                 "base_dir": str(tmp_path),
                 "mode": "root",
             }
-            engine_instance = MagicMock()
-            engine_instance.provider = "anthropic"
-            engine_instance.send.return_value = "Hello!"
-            mock_engine_cls.return_value = engine_instance
 
             from llm_forge.chat.ui import launch_chat
 
-            with (
-                patch("llm_forge.chat.ui._get_input", return_value="quit"),
-                patch("llm_forge.chat.ui._stream_response"),
-            ):
-                launch_chat()
+            launch_chat()
 
             mock_scaffold.assert_called_once_with(".")
 
@@ -171,11 +174,22 @@ class TestDetectSkipsLlmforgeDir:
         """When is_llmforge is True, scaffold_project is never called."""
         import os
 
+        engine_instance = MagicMock()
+        engine_instance.provider = "anthropic"
+        engine_instance.send.return_value = "Welcome back!"
+        engine_instance.memory = MagicMock()
+        engine_instance.memory.db_path = "/tmp/fake.db"
+
         with (
             patch("llm_forge.chat.ui.detect_project_type") as mock_detect,
             patch("llm_forge.chat.ui.scaffold_project") as mock_scaffold,
             patch("llm_forge.chat.ui._print_banner"),
-            patch("llm_forge.chat.ui.ChatEngine") as mock_engine_cls,
+            patch("llm_forge.chat.ui._print_response"),
+            patch("llm_forge.chat.ui._print_error"),
+            patch("llm_forge.chat.ui.ChatEngine", return_value=engine_instance),
+            patch("llm_forge.chat.ui._setup_api_key", return_value=engine_instance),
+            patch("llm_forge.chat.ui._get_input", return_value="quit"),
+            patch("llm_forge.chat.ui._stream_response"),
             patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-test"}, clear=True),
         ):
             mock_detect.return_value = {
@@ -187,18 +201,10 @@ class TestDetectSkipsLlmforgeDir:
                 "recommended_mode": "root",
                 "existing_files": [".llmforge"],
             }
-            engine_instance = MagicMock()
-            engine_instance.provider = "anthropic"
-            engine_instance.send.return_value = "Welcome back!"
-            mock_engine_cls.return_value = engine_instance
 
             from llm_forge.chat.ui import launch_chat
 
-            with (
-                patch("llm_forge.chat.ui._get_input", return_value="quit"),
-                patch("llm_forge.chat.ui._stream_response"),
-            ):
-                launch_chat()
+            launch_chat()
 
             mock_scaffold.assert_not_called()
 
