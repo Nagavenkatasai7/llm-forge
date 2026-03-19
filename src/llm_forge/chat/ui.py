@@ -47,52 +47,189 @@ def _get_console():
 # ---------------------------------------------------------------------------
 
 _TOOL_LABELS: dict[str, str] = {
-    "detect_hardware": "[Hardware] Detecting system capabilities",
-    "scan_data": "[Scan] Analyzing data sources",
-    "write_config": "[Config] Writing configuration",
-    "validate_config": "[Config] Validating configuration",
-    "read_file": "[Read] Reading file",
-    "write_file": "[Write] Writing file",
-    "run_command": "[Shell] Running command",
-    "start_training": "[Train] Starting training",
-    "check_training_status": "[Train] Checking training status",
-    "export_model": "[Export] Exporting model",
-    "deploy_to_ollama": "[Deploy] Deploying to Ollama",
-    "deploy_to_huggingface": "[Deploy] Deploying to HuggingFace",
-    "search_huggingface": "[Search] Searching HuggingFace Hub",
-    "download_model": "[Download] Downloading model",
-    "save_memory": "[Memory] Saving insight",
-    "recall_memory": "[Memory] Recalling context",
-    "get_project_state": "[State] Loading project state",
-    "get_session_history": "[History] Loading session history",
-    "log_training_run": "[Log] Recording training metrics",
-    "install_package": "[Install] Installing package",
-    "install_dependencies": "[Install] Installing dependencies",
-    "fetch_url": "[Fetch] Fetching URL",
-    "convert_document": "[Convert] Converting document",
-    "list_configs": "[Config] Listing configurations",
-    "run_evaluation": "[Eval] Running evaluation",
-    "read_training_logs": "[Logs] Reading training logs",
-    "show_model_info": "[Info] Showing model info",
-    "estimate_training": "[Estimate] Estimating training cost",
-    "detect_project": "[Detect] Detecting project type",
-    "setup_project": "[Setup] Setting up project",
+    "detect_hardware": "Detect hardware",
+    "scan_data": "Scan data",
+    "write_config": "Write config",
+    "validate_config": "Validate config",
+    "read_file": "Read file",
+    "write_file": "Write file",
+    "run_command": "Run",
+    "start_training": "Start training",
+    "check_training_status": "Check training status",
+    "export_model": "Export model",
+    "deploy_to_ollama": "Deploy to Ollama",
+    "deploy_to_huggingface": "Deploy to HuggingFace",
+    "search_huggingface": "Search HuggingFace",
+    "download_model": "Download model",
+    "save_memory": "Save memory",
+    "recall_memory": "Recall memory",
+    "get_project_state": "Load project state",
+    "get_session_history": "Load session history",
+    "log_training_run": "Log training run",
+    "install_package": "Install package",
+    "install_dependencies": "Install dependencies",
+    "fetch_url": "Fetch URL",
+    "convert_document": "Convert document",
+    "list_configs": "List configs",
+    "run_evaluation": "Run evaluation",
+    "read_training_logs": "Read training logs",
+    "show_model_info": "Show model info",
+    "estimate_training": "Estimate training",
+    "detect_project": "Detect project type",
+    "setup_project": "Set up project",
 }
 
 
-def _print_tool_action(tool_name: str, description: str = "") -> None:
-    """Show a tool execution indicator line.
+def _format_tool_detail(tool_name: str, input_data: dict | None) -> str:
+    """Build a descriptive one-liner showing what tool is being called and with what input."""
+    if input_data is None:
+        return _TOOL_LABELS.get(tool_name, tool_name)
 
-    Displays a dim, indented label so the user can see what work the
-    engine is performing behind the scenes, without cluttering the
-    main conversation flow.
+    if tool_name == "read_file":
+        return f"Read file: {input_data.get('path', '?')}"
+    elif tool_name == "write_file":
+        return f"Write file: {input_data.get('path', '?')}"
+    elif tool_name == "run_command":
+        cmd = input_data.get("command", "?")
+        if len(cmd) > 60:
+            cmd = cmd[:57] + "..."
+        return f"Run: {cmd}"
+    elif tool_name == "scan_data":
+        return f"Scan data: {input_data.get('path', '?')}"
+    elif tool_name == "write_config":
+        return f"Write config: {input_data.get('output_path', '?')}"
+    elif tool_name == "detect_hardware":
+        return "Detect hardware"
+    elif tool_name == "save_memory":
+        cat = input_data.get("category", "")
+        content = input_data.get("content", "")[:50]
+        return f"Save memory [{cat}]: {content}"
+    elif tool_name == "recall_memory":
+        return f"Recall memory: {input_data.get('query', '?')}"
+    elif tool_name == "install_package":
+        return f"Install: {input_data.get('package_name', '?')}"
+    elif tool_name == "fetch_url":
+        url = input_data.get("url", "?")
+        if len(url) > 50:
+            url = url[:47] + "..."
+        return f"Fetch: {url}"
+    elif tool_name == "convert_document":
+        return f"Convert: {input_data.get('input_path', '?')}"
+    elif tool_name == "start_training":
+        return f"Start training: {input_data.get('config_path', '?')}"
+    elif tool_name == "search_huggingface":
+        return f"Search HuggingFace: {input_data.get('query', '?')}"
+    elif tool_name == "estimate_training":
+        return f"Estimate: {input_data.get('model_name', '?')} ({input_data.get('mode', '?')})"
+    elif tool_name == "deploy_to_ollama":
+        return f"Deploy to Ollama: {input_data.get('model_name', '?')}"
+    elif tool_name == "validate_config":
+        return f"Validate: {input_data.get('config_path', '?')}"
+    elif tool_name == "get_project_state":
+        return "Load project state"
+    elif tool_name == "get_session_history":
+        return "Load session history"
+    elif tool_name == "log_training_run":
+        model = input_data.get("model_name", "?")
+        mode = input_data.get("mode", "?")
+        return f"Log training run: {model} ({mode})"
+    else:
+        return _TOOL_LABELS.get(tool_name, tool_name)
+
+
+def _summarize_tool_result(tool_name: str, result_json: str) -> str | None:
+    """Extract a brief one-line summary from a tool result JSON string."""
+    import json as _json
+
+    try:
+        data = _json.loads(result_json)
+    except (_json.JSONDecodeError, TypeError):
+        return None
+
+    if not isinstance(data, dict):
+        return None
+
+    if tool_name == "detect_hardware":
+        gpu = data.get("gpu_type", "no GPU")
+        ram = data.get("ram_total_gb", "?")
+        rec = data.get("recommendation", {})
+        mode = rec.get("mode", "?") if isinstance(rec, dict) else "?"
+        return f"{gpu}, {ram} GB RAM -> {mode} recommended"
+    elif tool_name == "scan_data":
+        count = data.get("sample_count", "?")
+        fmt = data.get("detected_format", "?")
+        return f"{count} samples, {fmt} format"
+    elif tool_name == "write_config":
+        return data.get("message", "Config saved")
+    elif tool_name == "read_file":
+        lines = data.get("line_count", "?")
+        size = data.get("size_bytes", 0)
+        return f"{lines} lines, {size:,} bytes"
+    elif tool_name == "run_command":
+        rc = data.get("return_code", "?")
+        stdout = (data.get("stdout", "") or "")[:80]
+        if rc == 0 and stdout:
+            return stdout.strip().split("\n")[0]
+        elif rc != 0:
+            return f"Exit code {rc}"
+        return None
+    elif tool_name == "write_file":
+        return data.get("status", None)
+    elif tool_name == "install_package":
+        return data.get("message", None)
+    elif tool_name == "estimate_training":
+        fits = data.get("fits_in_memory", True)
+        time_min = data.get("estimated_time_minutes", "?")
+        vram = data.get("estimated_vram_gb", "?")
+        if not fits:
+            return f"WARNING: needs {vram} GB VRAM, won't fit!"
+        return f"~{time_min} min, {vram} GB VRAM"
+    elif tool_name in ("save_memory", "recall_memory", "log_training_run"):
+        status = data.get("status", "")
+        count = data.get("count", "")
+        if count:
+            return f"{count} result(s)"
+        return status or None
+    elif tool_name == "get_project_state":
+        proj = data.get("project_dir", "")
+        return f"project: {proj}" if proj else None
+    elif tool_name == "get_session_history":
+        sessions = data.get("sessions", [])
+        return f"{len(sessions)} past session(s)"
+    return None
+
+
+def _print_tool_action(
+    tool_name: str,
+    input_data: dict | None = None,
+    description: str = "",
+) -> None:
+    """Show a tool execution indicator line with context.
+
+    Displays a dim, indented label showing what tool is being called
+    and with what arguments, in a Claude Code-inspired style.
     """
     console = _get_console()
-    label = description or _TOOL_LABELS.get(tool_name, f"[Tool] {tool_name}")
+    if description:
+        label = description
+    else:
+        label = _format_tool_detail(tool_name, input_data)
     if console is not None:
-        console.print(f"  [dim]{label}[/dim]")
+        console.print(f"  [dim cyan]{label}[/dim cyan]")
     else:
         print(f"  {label}")
+
+
+def _print_tool_result_summary(tool_name: str, result_json: str) -> None:
+    """Show a brief, indented result summary beneath a tool action line."""
+    summary = _summarize_tool_result(tool_name, result_json)
+    if not summary:
+        return
+    console = _get_console()
+    if console is not None:
+        console.print(f"    [dim]{summary}[/dim]")
+    else:
+        print(f"    {summary}")
 
 
 # ---------------------------------------------------------------------------
@@ -295,17 +432,40 @@ def _check_esc_pressed() -> bool:
 
 
 def _stream_response(engine: ChatEngine, user_input: str) -> None:
-    """Stream the assistant response with clean formatting.
+    """Stream the assistant response with Claude Code-style action indicators.
 
-    Key improvements over the previous implementation:
-    - Uses a SINGLE shared Console (no ``Console()`` per chunk)
-    - Prints header/footer rules for clear visual separation
-    - Shows an interrupt hint only when actually interrupted
+    Shows a "thinking..." indicator before the first token, displays
+    detailed tool actions as they execute, and streams the final text
+    response with lightweight visual separation.
     """
     console = _get_console()
     interrupted = False
     text_chunks: list[str] = []
     first_token_received = False
+    thinking_shown = False
+
+    def _show_thinking() -> None:
+        nonlocal thinking_shown
+        if thinking_shown:
+            return
+        thinking_shown = True
+        if console is not None:
+            console.print()
+            console.print("  [dim italic]thinking...[/dim italic]")
+        else:
+            print()
+            print("  thinking...")
+
+    def _clear_thinking_for_text() -> None:
+        """Print the Forge header when the first text token arrives."""
+        if console is not None:
+            console.print()
+            console.print("[bold green]Forge[/bold green]")
+            console.print()
+        else:
+            print()
+            print("Forge:")
+            print()
 
     def on_text(chunk: str) -> None:
         """Called for each streamed text chunk."""
@@ -313,6 +473,7 @@ def _stream_response(engine: ChatEngine, user_input: str) -> None:
         text_chunks.append(chunk)
         if not first_token_received:
             first_token_received = True
+            _clear_thinking_for_text()
         if console is not None:
             console.print(chunk, end="", highlight=False, soft_wrap=True)
         else:
@@ -327,41 +488,32 @@ def _stream_response(engine: ChatEngine, user_input: str) -> None:
             return True
         return False
 
-    # -- Header --
-    if console is not None:
-        try:
-            from rich.rule import Rule
-
-            console.print(Rule(style="dim green"))
-            console.print("[bold green]Forge[/bold green]")
-            console.print()
-        except ImportError:
-            console.print("[bold green]Forge:[/bold green] ", end="")
-    else:
-        print("Forge: ", end="")
-
     # -- Wire tool-action display into the engine for this request --
-    prev_callback = engine.on_tool_start
+    prev_start = engine.on_tool_start
+    prev_end = engine.on_tool_end
 
-    def _on_tool(name: str, _input_data: dict) -> None:
-        _print_tool_action(name)
+    def _on_tool_start(name: str, input_data: dict) -> None:
+        _show_thinking()
+        _print_tool_action(name, input_data=input_data)
 
-    engine.on_tool_start = _on_tool
+    def _on_tool_end(name: str, _input_data: dict, result: str) -> None:
+        _print_tool_result_summary(name, result)
+
+    engine.on_tool_start = _on_tool_start
+    engine.on_tool_end = _on_tool_end
+
+    # Show thinking before we start (covers the initial API latency)
+    _show_thinking()
 
     try:
         engine.send(user_input, on_text=on_text, interrupt_check=interrupt_check)
     finally:
-        engine.on_tool_start = prev_callback
+        engine.on_tool_start = prev_start
+        engine.on_tool_end = prev_end
 
     # -- Footer --
     if console is not None:
         console.print()  # newline after last streamed chunk
-        try:
-            from rich.rule import Rule
-
-            console.print(Rule(style="dim green"))
-        except ImportError:
-            pass
         console.print()
     else:
         print()
@@ -594,7 +746,14 @@ def launch_chat(provider: str | None = None) -> None:
                 return
 
     # Wire tool-action display for the initial greeting and all future calls
-    engine.on_tool_start = lambda name, _input: _print_tool_action(name)
+    def _greeting_tool_start(name: str, input_data: dict) -> None:
+        _print_tool_action(name, input_data=input_data)
+
+    def _greeting_tool_end(name: str, _input_data: dict, result: str) -> None:
+        _print_tool_result_summary(name, result)
+
+    engine.on_tool_start = _greeting_tool_start
+    engine.on_tool_end = _greeting_tool_end
 
     # Send initial greeting
     try:

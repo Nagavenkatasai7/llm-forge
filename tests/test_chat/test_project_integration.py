@@ -329,7 +329,7 @@ class TestSystemPromptSetup:
     def test_system_prompt_has_project_setup(self) -> None:
         from llm_forge.chat.system_prompt import SYSTEM_PROMPT
 
-        assert "## Project Setup" in SYSTEM_PROMPT
+        assert "## Project Layout" in SYSTEM_PROMPT
 
     def test_system_prompt_mentions_configs_dir(self) -> None:
         from llm_forge.chat.system_prompt import SYSTEM_PROMPT

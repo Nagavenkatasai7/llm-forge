@@ -215,9 +215,11 @@ class ChatEngine:
         self.permissions = PermissionSystem(auto_approve=True)
         self._client = None
 
-        # Optional UI callback: called with (tool_name, input_data) before
-        # each tool execution so the UI can display progress indicators.
+        # Optional UI callbacks: called before/after each tool execution
+        # so the UI can display progress indicators.
         self.on_tool_start: callable | None = None
+        # Called with (tool_name, input_data, result_json) after execution.
+        self.on_tool_end: callable | None = None
 
         # Build dynamic system prompt with memory context
         self.system = self._build_system_prompt()
@@ -357,30 +359,40 @@ class ChatEngine:
 
         # Memory-specific tools
         if name == "save_memory":
-            return self.memory.save_memory(
+            result = self.memory.save_memory(
                 category=input_data.get("category", "general"),
                 content=input_data["content"],
                 relevance=input_data.get("relevance", 1.0),
             )
         elif name == "recall_memory":
-            return self.memory.recall_memory(
+            result = self.memory.recall_memory(
                 query=input_data["query"],
                 limit=input_data.get("limit", 10),
             )
         elif name == "get_project_state":
-            return json.dumps(self.memory.project_state, indent=2)
+            result = json.dumps(self.memory.project_state, indent=2)
         elif name == "get_session_history":
-            return self.memory.get_session_history(limit=input_data.get("limit", 5))
+            result = self.memory.get_session_history(limit=input_data.get("limit", 5))
         elif name == "log_training_run":
-            return self.memory.log_training_run(**input_data)
+            result = self.memory.log_training_run(**input_data)
         elif name in EXECUTION_TOOL_NAMES:
             # Gate execution tools through the permission system
             allowed, reason = self.permissions.check(name, input_data)
             if not allowed:
-                return json.dumps({"status": "blocked", "reason": reason})
-            return execute_execution_tool(name, input_data)
+                result = json.dumps({"status": "blocked", "reason": reason})
+            else:
+                result = execute_execution_tool(name, input_data)
         else:
-            return execute_tool(name, input_data)
+            result = execute_tool(name, input_data)
+
+        # Notify UI callback (if registered) so it can display the result
+        if self.on_tool_end is not None:
+            try:
+                self.on_tool_end(name, input_data, result)
+            except Exception:
+                pass  # Never let a UI callback break tool execution
+
+        return result
 
     def end_session(self) -> None:
         """End the session gracefully, saving memory."""
