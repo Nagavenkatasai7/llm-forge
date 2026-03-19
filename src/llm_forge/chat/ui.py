@@ -140,6 +140,73 @@ def _get_input() -> str:
         return input("You: ")
 
 
+def _setup_api_key(engine: ChatEngine, provider: str | None) -> ChatEngine:
+    """Handle API key setup: load saved key, ask user, or fall back to wizard."""
+    import os
+    from pathlib import Path
+
+    llmforge_dir = Path(".llmforge")
+    key_file = llmforge_dir / ".api_key"
+
+    # Try loading saved key
+    if key_file.exists():
+        saved_key = key_file.read_text().strip()
+        if saved_key:
+            os.environ["ANTHROPIC_API_KEY"] = saved_key
+            return ChatEngine(provider="anthropic", project_dir=".")
+
+    # Ask the user
+    try:
+        from rich.console import Console
+
+        console = Console()
+        console.print(
+            "\n[bold cyan]LLM Forge needs an API key for the conversational experience.[/bold cyan]\n"
+        )
+        console.print(
+            "  Get a free Claude API key at: [link]https://console.anthropic.com/[/link]\n"
+        )
+        console.print("[bold]Paste your API key[/bold] (or press Enter to skip): ", end="")
+        user_key = input().strip()
+    except (ImportError, EOFError):
+        print("\nLLM Forge needs an API key for the conversational experience.")
+        print("Get one at: https://console.anthropic.com/")
+        user_key = input("Paste your API key (or press Enter to skip): ").strip()
+
+    if user_key:
+        # Save the key securely
+        os.environ["ANTHROPIC_API_KEY"] = user_key
+        llmforge_dir.mkdir(parents=True, exist_ok=True)
+        key_file.write_text(user_key)
+        key_file.chmod(0o600)  # Read/write only for owner
+
+        try:
+            from rich.console import Console
+
+            Console().print("[green]API key saved! You won't need to enter it again.[/green]\n")
+        except ImportError:
+            print("API key saved! You won't need to enter it again.\n")
+
+        return ChatEngine(provider="anthropic", project_dir=".")
+    else:
+        # User skipped — offer free wizard
+        try:
+            from rich.console import Console
+
+            Console().print(
+                "\n[dim]No API key? No problem. Launching the free guided wizard instead.[/dim]\n"
+            )
+        except ImportError:
+            print("\nNo API key? No problem. Launching the free guided wizard instead.\n")
+
+        from llm_forge.chat.wizard_fallback import launch_wizard_fallback
+
+        launch_wizard_fallback()
+        import sys
+
+        sys.exit(0)
+
+
 def launch_chat(provider: str | None = None) -> None:
     """Launch the interactive chat session with memory."""
     _print_banner()
@@ -182,12 +249,9 @@ def launch_chat(provider: str | None = None) -> None:
     # Now continue with normal engine initialization
     engine = ChatEngine(provider=provider, project_dir=".")
 
-    # Check for API key — launch free wizard fallback if none found
+    # If no API key, try to load saved key or ask the user
     if engine.provider == "none":
-        from llm_forge.chat.wizard_fallback import launch_wizard_fallback
-
-        launch_wizard_fallback()
-        return
+        engine = _setup_api_key(engine, provider)
 
     # Show memory status
     try:

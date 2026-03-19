@@ -87,5 +87,6 @@ metrics.db
 # Claude project memory (personal context)
 .claude/projects/
 
-# LLM Forge memory (user-specific, auto-generated)
+# LLM Forge memory and secrets (user-specific, auto-generated)
 .llmforge/
+.api_key
