@@ -1,0 +1,88 @@
+# ============================================================================
+# Finance Specialist — Local Training (Apple M4 Pro)
+# ============================================================================
+# Subset of Finance-Instruct-500k, Llama-3.2-1B-Instruct + LoRA on MPS
+# v6: max_seq_length 2048 (multi-turn), LoRA r=16 (less forgetting),
+#     multi-turn Modelfile template (range .Messages)
+# ============================================================================
+
+model:
+  name: "unsloth/Llama-3.2-1B-Instruct"
+  max_seq_length: 2048
+  attn_implementation: "sdpa"
+  torch_dtype: "bf16"
+
+lora:
+  r: 16
+  alpha: 32
+  dropout: 0
+  target_modules: "all-linear"
+  bias: "none"
+  task_type: "CAUSAL_LM"
+  use_rslora: true
+  use_dora: false
+
+data:
+  train_path: "Josephgflowers/Finance-Instruct-500k"
+  format: "sharegpt"
+  system_prompt: "You are a finance specialist AI assistant. You provide accurate, well-reasoned financial analysis and advice based on established financial principles, regulations, and market practices. You can also discuss other topics when asked. If the user changes the subject, follow their lead. If asked about your capabilities or technical details, answer honestly."
+  test_size: 0.05
+  max_samples: 5000
+  seed: 42
+  num_workers: 4
+  cleaning:
+    enabled: false
+
+training:
+  mode: "lora"
+  output_dir: "outputs/finance-specialist-v6"
+  num_epochs: 1
+  per_device_train_batch_size: 2
+  per_device_eval_batch_size: 2
+  gradient_accumulation_steps: 8
+  learning_rate: 5.0e-5
+  weight_decay: 0.01
+  warmup_ratio: 0.05
+  lr_scheduler_type: "cosine"
+  max_grad_norm: 1.0
+  logging_steps: 10
+  eval_strategy: "steps"
+  eval_steps: 200
+  save_steps: 200
+  save_total_limit: 2
+  bf16: false
+  fp16: false
+  gradient_checkpointing: true
+  optim: "adamw_torch"
+  group_by_length: true
+  report_to:
+    - "none"
+  neftune_noise_alpha: 5.0
+  label_smoothing_factor: 0.0
+  completion_only_loss: true
+  assistant_only_loss: true
+  average_tokens_across_devices: false
+  pack_sequences: false
+
+evaluation:
+  enabled: false
+
+iti:
+  enabled: false
+
+refusal:
+  enabled: false
+
+ifd:
+  enabled: false
+
+serving:
+  export_format: "gguf"
+  gguf_quantization: "Q4_K_M"
+  merge_adapter: true
+  generate_modelfile: true
+  inference_temperature: 0.1
+  inference_top_k: 40
+  inference_repeat_penalty: 1.1
+  inference_num_predict: 256
+  inference_num_ctx: 2048

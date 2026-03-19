@@ -1,0 +1,104 @@
+# =============================================================================
+# llm-forge preset: lora_default
+# =============================================================================
+# Standard LoRA fine-tuning of Llama-3.2-1B with balanced data cleaning.
+# Suitable for consumer GPUs with >= 16 GB VRAM (e.g. RTX 4090).
+#
+# Effective batch size = per_device_train_batch_size * gradient_accumulation_steps
+#                      = 4 * 4 = 16
+# =============================================================================
+
+model:
+  name: "meta-llama/Llama-3.2-1B"
+  torch_dtype: "bf16"
+  max_seq_length: 2048
+  attn_implementation: "flash_attention_2"
+  trust_remote_code: false
+
+lora:
+  r: 16                         # Low-rank dimension
+  alpha: 32                     # Scaling factor (effective scale = alpha / r = 2.0)
+  dropout: 0.05
+  target_modules:
+    - "q_proj"
+    - "k_proj"
+    - "v_proj"
+    - "o_proj"
+    - "gate_proj"
+    - "up_proj"
+    - "down_proj"
+  bias: "none"
+  task_type: "CAUSAL_LM"
+  use_rslora: false
+  use_dora: false
+
+quantization:
+  load_in_4bit: false
+  load_in_8bit: false
+
+data:
+  train_path: "tatsu-lab/alpaca"
+  format: "alpaca"
+  input_field: "instruction"
+  output_field: "output"
+  context_field: "input"
+  test_size: 0.05
+  seed: 42
+  streaming: false
+  num_workers: 4
+  cleaning:
+    enabled: true
+    quality_preset: "balanced"
+    unicode_fix: true
+    heuristic_filter: true
+    min_word_count: 5
+    max_word_count: 100000
+    alpha_ratio_threshold: 0.6
+    symbol_to_word_ratio: 0.1
+    dedup_enabled: true
+    dedup_tiers:
+      - "exact"
+      - "fuzzy"
+    dedup_jaccard_threshold: 0.85
+    dedup_num_perm: 128
+    dedup_shingle_size: 5
+    toxicity_filter: false
+    pii_redaction: false
+
+training:
+  mode: "lora"
+  output_dir: "outputs/lora-llama3.2-1b"
+  num_epochs: 3
+  per_device_train_batch_size: 4
+  per_device_eval_batch_size: 4
+  gradient_accumulation_steps: 4
+  learning_rate: 2.0e-4
+  weight_decay: 0.01
+  warmup_ratio: 0.03
+  lr_scheduler_type: "cosine"
+  max_grad_norm: 1.0
+  logging_steps: 10
+  eval_strategy: "epoch"
+  save_steps: 500
+  save_total_limit: 3
+  bf16: true
+  fp16: false
+  gradient_checkpointing: false
+  optim: "adamw_torch"
+  group_by_length: true
+  report_to:
+    - "wandb"
+
+evaluation:
+  enabled: true
+  benchmarks:
+    - "hellaswag"
+    - "arc_easy"
+  num_fewshot: 0
+  batch_size: 8
+  generate_report: true
+
+serving:
+  backend: "gradio"
+  port: 7860
+  merge_adapter: true

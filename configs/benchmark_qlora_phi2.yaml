@@ -1,0 +1,66 @@
+# Benchmark: Phi-2 (2.7B) QLoRA — Tests quantized training path (~20 min on A100)
+# Tests: QLoRA mode, 4-bit quantization, larger model with memory optimization
+# Run: llm-forge train --config configs/benchmark_qlora_phi2.yaml --verbose
+
+model:
+  name: "microsoft/phi-2"
+  max_seq_length: 2048
+  attn_implementation: "flash_attention_2"
+  torch_dtype: "bf16"
+  trust_remote_code: true
+
+lora:
+  r: 16
+  alpha: 32
+  dropout: 0.05
+  target_modules:
+    - q_proj
+    - k_proj
+    - v_proj
+    - dense
+
+quantization:
+  load_in_4bit: true
+  bnb_4bit_compute_dtype: "bf16"
+  bnb_4bit_quant_type: "nf4"
+  bnb_4bit_use_double_quant: true
+
+data:
+  train_path: "tatsu-lab/alpaca"
+  format: "alpaca"
+  max_samples: 2000
+  test_size: 0.05
+  cleaning:
+    enabled: true
+    quality_preset: "balanced"
+    unicode_fix: true
+    dedup_enabled: true
+
+training:
+  mode: "qlora"
+  output_dir: "./outputs/benchmark-qlora-phi2/"
+  num_epochs: 1
+  per_device_train_batch_size: 4
+  gradient_accumulation_steps: 4
+  learning_rate: 2.0e-4
+  lr_scheduler_type: "cosine"
+  warmup_ratio: 0.03
+  gradient_checkpointing: true
+  bf16: true
+  optim: "paged_adamw_32bit"
+  save_steps: 500
+  logging_steps: 10
+  report_to:
+    - "none"
+
+evaluation:
+  enabled: true
+  benchmarks:
+    - hellaswag
+    - arc_easy
+  num_fewshot: 0
+  generate_report: true
+
+serving:
+  export_format: "safetensors"
+  merge_adapter: true

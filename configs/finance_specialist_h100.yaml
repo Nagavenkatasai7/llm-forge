@@ -1,0 +1,161 @@
+# ============================================================================
+# llm-forge: Finance Specialist Pipeline — Full 12-Stage DAG (v2 FIXED)
+# ============================================================================
+# Model:    unsloth/Llama-3.2-1B (ungated mirror)
+# Dataset:  Josephgflowers/Finance-Instruct-500k (500K finance instruction pairs)
+# Method:   LoRA r=64 + RSLoRA + NEFTune + assistant-only loss
+# Hardware: 2x NVIDIA A100 80GB (Hopper HPC)
+#
+# FIXES from v1:
+#   1. completion_only_loss: true  (was false — trained on ALL tokens including
+#      system/user prompts, causing loss inflation 23-30 and prompt regurgitation)
+#   2. learning_rate: 5e-5         (was 2e-4 — too high for LoRA r=64)
+#   3. num_epochs: 1               (was 3 — overfitting on 500K samples)
+#   4. use_rslora: true            (was false — needed for r=64 gradient stability)
+#   5. lora_dropout: 0             (was 0.05 — dropout hurts LoRA fine-tuning)
+#   6. warmup_ratio: 0.05          (was 0.1 — shorter warmup with lower LR)
+#   7. label_smoothing_factor: 0.0 (disabled — inflates loss reporting)
+#   8. eval_steps: 250             (was 500 > total steps — never triggered)
+#   9. save_steps: 250             (was 500 > total steps — no checkpoints saved)
+#
+# Pipeline stages (12-stage DAG):
+#   data_loading -> cleaning -> preprocessing -> refusal_augmentation ->
+#   ifd_scoring -> training -> alignment -> iti_probing -> iti_baking ->
+#   model_merging -> evaluation -> export
+#
+# Run: llm-forge train --config configs/finance_specialist_h100.yaml --verbose --no-auto-optimize
+# ============================================================================
+
+model:
+  name: "unsloth/Llama-3.2-1B"                   # Ungated mirror (same weights as meta-llama/Llama-3.2-1B)
+  max_seq_length: 2048                            # 2048 is sufficient for finance Q&A
+  attn_implementation: "sdpa"                     # Use SDPA (FlashAttention not installed on Hopper)
+  torch_dtype: "bf16"
+
+lora:
+  r: 64                                        # High rank for domain specialization
+  alpha: 128                                    # 2x rank scaling
+  dropout: 0                                    # 0 recommended for LoRA — dropout hurts more than helps
+  target_modules: "all-linear"                  # Auto-discover all nn.Linear layers
+  bias: "none"
+  task_type: "CAUSAL_LM"
+  use_rslora: true                              # CRITICAL for r=64: uses alpha/sqrt(r) scaling
+  use_dora: false                               # Disabled — DoRA + bf16 can cause NaN gradients
+
+data:
+  train_path: "Josephgflowers/Finance-Instruct-500k"
+  format: "sharegpt"
+  system_prompt: "You are a finance specialist AI assistant. Provide accurate, well-reasoned financial analysis and advice based on established financial principles, regulations, and market practices. Always note when professional financial advice should be sought."
+  test_size: 0.02                               # 2% holdout (10K samples for eval)
+  seed: 42
+  num_workers: 8
+  cleaning:
+    enabled: true
+    quality_preset: "strict"                    # Strict for financial accuracy
+    unicode_fix: true
+    language_filter: ["en"]
+    language_confidence_threshold: 0.7
+    heuristic_filter: true
+    min_word_count: 10
+    max_word_count: 50000
+    min_char_count: 50
+    alpha_ratio_threshold: 0.5                  # Finance text may have numbers/symbols
+    symbol_to_word_ratio: 0.15                  # Allow some $ % symbols
+    toxicity_filter: false                      # Finance content may trigger false positives
+    pii_redaction: true
+    pii_entities:
+      - PERSON
+      - EMAIL_ADDRESS
+      - PHONE_NUMBER
+      - CREDIT_CARD
+      - US_SSN
+      - IP_ADDRESS
+    dedup_enabled: true
+    dedup_tiers:
+      - exact
+      - fuzzy
+    dedup_jaccard_threshold: 0.85
+    dedup_num_perm: 128
+
+training:
+  mode: "lora"
+  output_dir: "outputs/finance-specialist-llama1b-v2"
+  num_epochs: 1                                  # 1 epoch on 500K samples — prevents overfitting
+  per_device_train_batch_size: 4
+  per_device_eval_batch_size: 4
+  gradient_accumulation_steps: 4                 # Effective batch = 4 * 4 * 2 GPUs = 32
+  learning_rate: 5.0e-5                          # Reduced from 2e-4 for LoRA r=64 stability
+  weight_decay: 0.01
+  warmup_ratio: 0.05                             # 5% warmup (shorter with lower LR)
+  lr_scheduler_type: "cosine"
+  max_grad_norm: 1.0
+  logging_steps: 10                              # More frequent logging for visibility
+  eval_strategy: "steps"
+  eval_steps: 250                                # Evaluate every 250 steps (was 500 > total steps)
+  save_steps: 250                                # Save checkpoints every 250 steps
+  save_total_limit: 3
+  bf16: true
+  gradient_checkpointing: true
+  optim: "adamw_torch_fused"                     # Fused optimizer — faster than paged_adamw
+  group_by_length: true
+  report_to:
+    - "none"                                     # W&B disabled by default (set to "wandb" if configured)
+  neftune_noise_alpha: 5.0                       # NEFTune regularization
+  label_smoothing_factor: 0.0                    # Disabled — inflates loss numbers
+  completion_only_loss: true                     # CRITICAL FIX: Only train on assistant responses
+  average_tokens_across_devices: true            # Fix gradient accumulation loss scaling
+  pack_sequences: false                          # DISABLED — requires FlashAttention2
+
+distributed:
+  enabled: true
+  framework: "fsdp"
+  num_gpus: 2
+  fsdp_sharding_strategy: "FULL_SHARD"
+
+evaluation:
+  enabled: true
+  benchmarks:
+    - hellaswag
+    - arc_easy
+    - mmlu
+    - truthfulqa_mc2
+    - ifeval
+    - winogrande
+    - gsm8k
+  num_fewshot: 0
+  batch_size: 8
+  generate_report: true
+  regression_check: true
+  regression_threshold: -0.02
+  retention_probes: true
+  retention_threshold: 0.80
+
+iti:
+  enabled: true
+  probing_dataset: "truthful_qa"
+  num_probing_samples: 500
+  num_heads: 48
+  alpha: 15.0
+  method: "center_of_mass"
+  bake_in: true
+
+refusal:
+  enabled: true
+  refusal_ratio: 0.15
+  refusal_responses:
+    - "I don't have enough information to provide accurate financial guidance on that."
+    - "That question falls outside my area of financial expertise. Please consult a licensed financial advisor."
+    - "I'm not confident enough in my knowledge to advise on that financial matter."
+    - "I cannot provide reliable information on that specific financial topic."
+
+ifd:
+  enabled: false                                  # Disabled — IFD on 500K samples is too slow even on GPU
+  select_ratio: 0.7                             # Keep top 70% by IFD score
+  batch_size: 8
+  max_length: 1024
+
+serving:
+  backend: "gradio"
+  export_format: "gguf"
+  gguf_quantization: "Q4_K_M"
+  merge_adapter: true

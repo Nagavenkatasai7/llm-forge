@@ -1,0 +1,73 @@
+version: "3.8"
+
+services:
+  trainer:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.gpu
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    volumes:
+      - ../configs:/app/configs:ro
+      - ../data:/app/data:ro
+      - ../output:/app/output
+    networks:
+      - backend
+    command: ["train", "--config", "/app/configs/example_lora.yaml"]
+
+  server:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.gpu
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    ports:
+      - "7860:7860"
+    volumes:
+      - ../output:/app/output:ro
+      - ../configs:/app/configs:ro
+    networks:
+      - frontend
+      - backend
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:7860/health"]
+      interval: 30s
+      timeout: 10s
+      start_period: 60s
+      retries: 3
+    command: ["serve", "--config", "/app/configs/example_lora.yaml"]
+
+  vectordb:
+    image: chromadb/chroma:1.5.2
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - chroma_data:/chroma/chroma
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v2/heartbeat"]
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
+
+networks:
+  frontend:
+    driver: bridge
+  backend:
+    driver: bridge
+    internal: true
+
+volumes:
+  chroma_data:

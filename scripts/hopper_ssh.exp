@@ -1,0 +1,37 @@
+#!/usr/bin/expect -f
+set timeout 120
+log_user 1
+
+spawn ssh -o StrictHostKeyChecking=no -o NumberOfPasswordPrompts=1 hopper echo CONNECTED
+
+expect {
+    "password:" {
+        sleep 1
+        send "Neeraja%2002\r"
+        exp_continue
+    }
+    "passcode or option" {
+        send "1\r"
+        exp_continue
+    }
+    "Enter a passcode" {
+        send "1\r"
+        exp_continue
+    }
+    "CONNECTED" {
+        puts "\nSUCCESS"
+        exit 0
+    }
+    "Permission denied" {
+        puts "\nWrong password"
+        exit 1
+    }
+    timeout {
+        puts "\nTimed out — approve Duo on your phone"
+        exit 1
+    }
+    eof {
+        puts "\nConnection closed"
+        exit 1
+    }
+}

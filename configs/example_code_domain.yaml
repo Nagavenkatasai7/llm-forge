@@ -1,0 +1,57 @@
+# llm-forge: Code Domain Fine-Tuning Configuration
+# Fine-tune a model for code generation and understanding.
+# Run: llm-forge train --config configs/example_code_domain.yaml
+
+model:
+  name: "Qwen/Qwen2.5-1.5B"                 # Good code model base
+  max_seq_length: 4096
+  attn_implementation: "flash_attention_2"
+  torch_dtype: "bf16"
+
+lora:
+  r: 32
+  alpha: 64
+  dropout: 0.05
+  target_modules:
+    - q_proj
+    - k_proj
+    - v_proj
+    - o_proj
+    - gate_proj
+    - up_proj
+    - down_proj
+
+data:
+  train_path: "./data/code_train.jsonl"
+  format: "alpaca"
+  system_prompt: "You are a programming assistant. Provide clear, working code examples with explanations."
+  test_size: 0.1
+  cleaning:
+    enabled: true
+    quality_preset: "permissive"              # Code has different text patterns
+    unicode_fix: true
+    pii_redaction: false                      # Code rarely has PII
+    toxicity_filter: false                    # Code triggers false positives
+    dedup_enabled: true
+
+training:
+  mode: "lora"
+  output_dir: "./output/code-llm"
+  num_epochs: 3
+  per_device_train_batch_size: 2
+  gradient_accumulation_steps: 8
+  learning_rate: 1.5e-4
+  lr_scheduler_type: "cosine"
+  warmup_ratio: 0.03
+  gradient_checkpointing: true
+  bf16: true
+
+evaluation:
+  enabled: true
+  benchmarks:
+    - hellaswag
+
+serving:
+  backend: "gradio"
+  export_format: "safetensors"
+  merge_adapter: true

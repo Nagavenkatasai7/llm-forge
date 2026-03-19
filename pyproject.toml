@@ -1,0 +1,180 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "llm-forge"
+version = "0.1.0"
+description = "Config-driven, YAML-first open-source LLM training platform"
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.10,<3.13"
+authors = [
+    { name = "Naga Venkata Sai Chennu", email = "nchennu@gmu.edu" },
+]
+keywords = ["llm", "fine-tuning", "lora", "qlora", "training", "deep-learning", "transformers"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+    "transformers>=4.46",
+    "torch>=2.4",
+    "peft>=0.13",
+    "accelerate>=1.0",
+    "trl>=0.12",
+    "datasets>=3.0",
+    "tokenizers>=0.20",
+    "pydantic>=2.9",
+    "typer>=0.12",
+    "rich>=13.0",
+    "pyyaml>=6.0",
+    "wandb>=0.18",
+    "safetensors>=0.4",
+    "bitsandbytes>=0.44",
+    "scipy",
+    "numpy",
+]
+
+[project.optional-dependencies]
+rag = [
+    "chromadb>=0.5",
+    "llama-index>=0.11",
+    "langchain>=0.3",
+    "sentence-transformers>=3.0",
+    "faiss-cpu>=1.8",
+    "rank-bm25>=0.2",
+]
+serve = [
+    "gradio>=5.0",
+    "fastapi>=0.115",
+    "uvicorn>=0.30",
+    "vllm>=0.6",
+    "sentry-sdk[fastapi]>=2.0",
+]
+eval = [
+    "lm-eval>=0.4",
+    "rouge-score",
+    "nltk",
+]
+cleaning = [
+    "ftfy>=6.0",
+    "fasttext-wheel>=0.9",
+    "datasketch>=1.6",
+    "presidio-analyzer>=2.2",
+    "presidio-anonymizer>=2.2",
+    "detoxify>=0.5",
+    "trafilatura>=1.0",
+    "pymupdf>=1.24",
+    "python-docx>=1.0",
+    "spacy>=3.7",
+]
+distributed = [
+    "deepspeed>=0.15",
+    "transformer-engine>=1.8",
+]
+desktop = [
+    "pywebview>=5.0",
+    "gradio>=5.0",
+]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov",
+    "pytest-asyncio",
+    "ruff>=0.7",
+    "mypy>=1.12",
+    "pre-commit",
+]
+all = [
+    "llm-forge[rag]",
+    "llm-forge[serve]",
+    "llm-forge[desktop]",
+    "llm-forge[eval]",
+    "llm-forge[cleaning]",
+    "llm-forge[distributed]",
+    "llm-forge[dev]",
+]
+
+[project.scripts]
+llm-forge = "llm_forge.cli:app"
+
+[project.urls]
+Homepage = "https://github.com/Nagavenkatasai7/llm-forge"
+Documentation = "https://github.com/Nagavenkatasai7/llm-forge/tree/main/docs"
+Repository = "https://github.com/Nagavenkatasai7/llm-forge"
+Issues = "https://github.com/Nagavenkatasai7/llm-forge/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/llm_forge"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+src = ["src"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM"]
+ignore = [
+    "E501",   # line too long (handled by formatter)
+    "B904",   # raise-without-from-inside-except (intentional in CLI exit handlers)
+    "B017",   # pytest.raises(Exception) too broad (intentional in tests)
+    "SIM102", # collapsible-if (readability preference)
+    "SIM105", # suppressible-exception (readability preference)
+    "SIM108", # if-else-block-instead-of-if-exp (readability preference)
+    "SIM115", # open-file-with-context-handler (false positive on NamedTemporaryFile)
+    "SIM117", # multiple-with-statements (readability preference)
+    "E741",   # ambiguous variable name (common in ML: l, I, O)
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Re-exports in __init__.py files and try/except lazy imports
+"__init__.py" = ["F401"]
+# Optional dependency imports in try/except blocks
+"src/llm_forge/training/*.py" = ["F401"]
+"src/llm_forge/serving/*.py" = ["F401"]
+"src/llm_forge/evaluation/*.py" = ["F401"]
+"src/llm_forge/data/cleaning/__init__.py" = ["F401"]
+"src/llm_forge/data/ifd_scorer.py" = ["F401"]
+"src/llm_forge/utils/perf_dashboard.py" = ["F401"]
+"src/llm_forge/pipeline/pipeline_runner.py" = ["F401"]
+"src/llm_forge/rag/vectorstore.py" = ["F401"]
+"tests/*.py" = ["F401"]
+"tests/**/*.py" = ["F401"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["llm_forge"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+markers = [
+    "gpu: marks tests requiring a GPU",
+    "slow: marks slow tests",
+]
+addopts = "-v --tb=short"
+filterwarnings = [
+    "error",
+    # Third-party deprecation warnings we cannot fix
+    "ignore:`torch.jit.script_method` is deprecated:DeprecationWarning",
+    "ignore:builtin type .* has no __module__ attribute:DeprecationWarning",
+    "ignore:This process .* is multi-threaded, use of fork:DeprecationWarning",
+    "ignore:`fix_entities` has been renamed:DeprecationWarning",
+    "ignore:The `resume_download` argument is deprecated:UserWarning",
+    # Resource warnings from datasets library CSV reader (unclosed file handles)
+    "ignore::pytest.PytestUnraisableExceptionWarning",
+    # Our intentional schema validation warnings (OVERFITTING/FORGETTING RISK)
+    "ignore:OVERFITTING RISK:UserWarning",
+    "ignore:FORGETTING RISK:UserWarning",
+]
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+ignore_missing_imports = true

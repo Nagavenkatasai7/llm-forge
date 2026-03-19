@@ -1,0 +1,88 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+*.egg
+dist/
+build/
+.eggs/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project
+output/
+outputs/
+checkpoints/
+logs/
+wandb/
+*.ckpt
+*.pt
+*.bin
+*.safetensors
+*.gguf
+
+# Data (user training data — not committed)
+/data/
+*.jsonl
+*.parquet
+*.csv
+# Exception: example data IS committed
+!examples/data/*.jsonl
+!examples/data/*.txt
+
+# Environment and secrets
+.env
+.env.*
+*.key
+*.pem
+*.p12
+*.secret
+credentials.json
+service-account*.json
+
+# HuggingFace token cache
+.cache/huggingface/token
+
+# Eval results (large, machine-specific)
+eval_results/
+
+# Models (large files)
+models/
+*.model
+lid.176.bin
+
+# ChromaDB
+chroma_db/
+
+# Coverage
+.coverage
+htmlcov/
+coverage.xml
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Benchmark results (machine-specific paths)
+hopper_benchmark/
+
+# Metrics database
+metrics.db
+
+# Claude project memory (personal context)
+.claude/projects/

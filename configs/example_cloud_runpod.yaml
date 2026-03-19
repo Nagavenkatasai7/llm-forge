@@ -1,0 +1,87 @@
+# ============================================================================
+# Example: Cloud Training on RunPod (1x A100 80GB)
+# ============================================================================
+# RunPod offers on-demand GPUs at competitive prices (~$1.64/hr for A100).
+# Great for individual researchers and small teams.
+#
+# Prerequisites:
+#   - RunPod account (https://runpod.io)
+#   - SSH key added to RunPod dashboard
+#   - Pod created and running (grab SSH command from dashboard)
+#
+# Usage:
+#   python -m llm_forge.launch --config configs/example_cloud_runpod.yaml
+# ============================================================================
+
+model:
+  name: "meta-llama/Llama-3.2-1B-Instruct"
+  max_seq_length: 2048
+  attn_implementation: "flash_attention_2"
+  torch_dtype: "bf16"
+
+lora:
+  r: 16
+  alpha: 32
+  dropout: 0.05
+  target_modules:
+    - "q_proj"
+    - "v_proj"
+    - "k_proj"
+    - "o_proj"
+  bias: "none"
+  task_type: "CAUSAL_LM"
+
+data:
+  train_path: "tatsu-lab/alpaca"
+  format: "alpaca"
+  test_size: 0.05
+  seed: 42
+  num_workers: 4
+
+training:
+  mode: "lora"
+  output_dir: "outputs/runpod-training"
+  num_epochs: 1
+  per_device_train_batch_size: 4
+  gradient_accumulation_steps: 4
+  learning_rate: 2.0e-5
+  bf16: true
+  gradient_checkpointing: true
+  optim: "adamw_torch"
+  logging_steps: 10
+  save_steps: 100
+  completion_only_loss: true
+  assistant_only_loss: true
+  neftune_noise_alpha: null
+  label_smoothing_factor: 0.0
+
+evaluation:
+  enabled: false
+
+serving:
+  export_format: "gguf"
+  gguf_quantization: "Q4_K_M"
+  merge_adapter: true
+  generate_modelfile: true
+
+# ============================================================================
+# Compute Backend — RunPod
+# ============================================================================
+compute:
+  backend: "runpod"
+  sync_code: true
+  stream_logs: true
+  pull_outputs: true
+  local_output_dir: "outputs/runpod-training"
+  ssh:
+    host: "runpod-instance"                   # Add to ~/.ssh/config with RunPod SSH details
+    user: "root"
+    remote_dir: "/workspace/llm-forge"
+  cloud:
+    gpu_type: "A100"
+    num_gpus: 1
+    disk_gb: 100
+    spot: false                               # RunPod community cloud is already cheap
+    auto_shutdown: true
+    setup_commands:
+      - "pip install -e . --quiet"

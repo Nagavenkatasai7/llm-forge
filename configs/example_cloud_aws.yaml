@@ -1,0 +1,88 @@
+# ============================================================================
+# Example: Cloud Training on AWS (p4d.24xlarge — 8x A100 40GB)
+# ============================================================================
+# This template shows how to configure cloud-based training on AWS.
+# Adapt the model, data, and training sections to your use case.
+#
+# Prerequisites:
+#   - AWS CLI configured (aws configure)
+#   - SSH key pair created for EC2 instances
+#   - Security group allowing SSH (port 22)
+#
+# Usage:
+#   python -m llm_forge.launch --config configs/example_cloud_aws.yaml
+# ============================================================================
+
+model:
+  name: "meta-llama/Llama-3.2-1B-Instruct"
+  max_seq_length: 2048
+  attn_implementation: "flash_attention_2"
+  torch_dtype: "bf16"
+
+lora:
+  r: 16
+  alpha: 32
+  dropout: 0.05
+  target_modules:
+    - "q_proj"
+    - "v_proj"
+    - "k_proj"
+    - "o_proj"
+  bias: "none"
+  task_type: "CAUSAL_LM"
+
+data:
+  train_path: "tatsu-lab/alpaca"
+  format: "alpaca"
+  test_size: 0.05
+  seed: 42
+  num_workers: 8
+
+training:
+  mode: "lora"
+  output_dir: "outputs/cloud-training"
+  num_epochs: 1
+  per_device_train_batch_size: 4
+  gradient_accumulation_steps: 4
+  learning_rate: 2.0e-5
+  bf16: true
+  gradient_checkpointing: true
+  optim: "adamw_torch"
+  logging_steps: 10
+  save_steps: 100
+  completion_only_loss: true
+  assistant_only_loss: true
+  neftune_noise_alpha: null
+  label_smoothing_factor: 0.0
+
+evaluation:
+  enabled: false
+
+serving:
+  export_format: "safetensors"
+  merge_adapter: true
+
+# ============================================================================
+# Compute Backend — AWS EC2
+# ============================================================================
+compute:
+  backend: "aws"
+  sync_code: true
+  stream_logs: true
+  pull_outputs: true
+  local_output_dir: "outputs/cloud-training"
+  ssh:
+    host: "my-aws-gpu-instance"              # SSH alias from ~/.ssh/config
+    remote_dir: "~/llm-forge"
+  cloud:
+    instance_type: "p4d.24xlarge"             # 8x A100 40GB ($32.77/hr on-demand)
+    region: "us-east-1"
+    gpu_type: "A100"
+    num_gpus: 1                               # Use 1 GPU (set distributed.num_gpus for multi-GPU)
+    disk_gb: 200
+    spot: true                                # Use spot instances (up to 90% cheaper)
+    max_price_per_hour: 15.0                  # Max spot bid ($)
+    auto_shutdown: true                       # Stop instance when training finishes
+    docker_image: "nvcr.io/nvidia/pytorch:24.01-py3"
+    setup_commands:
+      - "pip install -e . --quiet"

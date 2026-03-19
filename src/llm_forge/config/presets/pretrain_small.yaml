@@ -1,0 +1,100 @@
+# =============================================================================
+# llm-forge preset: pretrain_small
+# =============================================================================
+# Pre-training a 125M-parameter language model from scratch.
+#
+# This preset is designed for learning / experimentation.  It trains a
+# GPT-2-sized model on a subset of a pre-training corpus using the
+# "completion" data format (raw text, no instruction formatting).
+#
+# Effective batch size = 4 * 8 * num_gpus = 32 (single GPU)
+# =============================================================================
+
+model:
+  name: "gpt2"                    # Architecture scaffold; weights will be re-initialised
+  torch_dtype: "bf16"
+  max_seq_length: 1024            # Shorter context for faster pre-training
+  attn_implementation: "flash_attention_2"
+  trust_remote_code: false
+
+lora:
+  r: 16
+  alpha: 32
+  dropout: 0.0
+
+quantization:
+  load_in_4bit: false
+  load_in_8bit: false
+
+data:
+  train_path: "roneneldan/TinyStories"   # Small, clean English corpus
+  format: "completion"                    # Raw text pre-training format
+  input_field: "text"
+  output_field: "text"
+  test_size: 0.01                         # Keep evaluation set small
+  seed: 42
+  streaming: true                         # Stream the dataset to avoid OOM
+  num_workers: 4
+  cleaning:
+    enabled: true
+    quality_preset: "balanced"
+    unicode_fix: true
+    heuristic_filter: true
+    min_word_count: 20
+    max_word_count: 100000
+    min_char_count: 100
+    alpha_ratio_threshold: 0.7
+    symbol_to_word_ratio: 0.05
+    dedup_enabled: true
+    dedup_tiers:
+      - "exact"
+    dedup_jaccard_threshold: 0.85
+    dedup_num_perm: 128
+    dedup_shingle_size: 5
+    toxicity_filter: false
+    pii_redaction: false
+
+training:
+  mode: "pretrain"
+  output_dir: "outputs/pretrain-125m"
+  num_epochs: 1                           # Pre-training is usually measured in tokens/steps
+  per_device_train_batch_size: 4
+  per_device_eval_batch_size: 4
+  gradient_accumulation_steps: 8
+  learning_rate: 6.0e-4                   # Higher LR for pre-training (Chinchilla-style)
+  weight_decay: 0.1
+  warmup_ratio: 0.01
+  lr_scheduler_type: "cosine"
+  max_grad_norm: 1.0
+  logging_steps: 50
+  eval_steps: 1000
+  eval_strategy: "steps"
+  save_steps: 2000
+  save_total_limit: 5
+  bf16: true
+  fp16: false
+  gradient_checkpointing: true
+  optim: "adamw_torch"
+  group_by_length: false                  # Not useful for pre-training (uniform lengths)
+  report_to:
+    - "wandb"
+
+distributed:
+  enabled: false
+  framework: "auto"
+  num_gpus: 1
+  deepspeed_stage: 2
+
+evaluation:
+  enabled: true
+  benchmarks:
+    - "hellaswag"
+    - "lambada_openai"
+  num_fewshot: 0
+  batch_size: 8
+  generate_report: true
+
+serving:
+  backend: "gradio"
+  port: 7860
+  merge_adapter: false

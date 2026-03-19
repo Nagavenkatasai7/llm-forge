@@ -1,0 +1,45 @@
+# llm-forge: Pre-Training Configuration
+# Train a language model from scratch.
+# Run: llm-forge train --config configs/example_pretrain.yaml
+
+model:
+  name: "gpt2"                              # Architecture reference (or custom)
+  max_seq_length: 1024
+  torch_dtype: "bf16"
+  attn_implementation: "sdpa"
+
+data:
+  train_path: "./data/corpus.txt"           # Your pre-training corpus
+  format: "completion"
+  test_size: 0.05
+  streaming: false
+  cleaning:
+    enabled: true
+    quality_preset: "balanced"
+    unicode_fix: true
+    dedup_enabled: true
+    pii_redaction: false                     # Usually not needed for pre-training
+
+training:
+  mode: "pretrain"
+  output_dir: "./output/my-pretrain"
+  num_epochs: 5
+  per_device_train_batch_size: 8
+  gradient_accumulation_steps: 8
+  learning_rate: 6.0e-4
+  lr_scheduler_type: "cosine"
+  warmup_ratio: 0.05
+  weight_decay: 0.1
+  max_grad_norm: 1.0
+  gradient_checkpointing: true
+  bf16: true
+  save_steps: 1000
+  logging_steps: 50
+
+evaluation:
+  enabled: true
+  benchmarks:
+    - hellaswag
+
+serving:
+  export_format: "safetensors"

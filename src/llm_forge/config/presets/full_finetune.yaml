@@ -1,0 +1,104 @@
+# =============================================================================
+# llm-forge preset: full_finetune
+# =============================================================================
+# Full (all-parameter) fine-tuning of SmolLM2-135M.
+#
+# SmolLM2-135M is small enough to fully fine-tune on a single GPU with
+# >= 16 GB VRAM.  For larger models, multi-GPU + DeepSpeed ZeRO-2 is
+# configured and ready to use -- just increase distributed.num_gpus.
+#
+# Effective batch size = 8 * 2 * num_gpus = 16 (single GPU)
+# =============================================================================
+
+model:
+  name: "HuggingFaceTB/SmolLM2-135M"
+  torch_dtype: "bf16"
+  max_seq_length: 2048
+  attn_implementation: "flash_attention_2"
+  trust_remote_code: false
+
+# LoRA is not used in full fine-tuning, but defaults are kept for reference.
+lora:
+  r: 16
+  alpha: 32
+  dropout: 0.0
+
+quantization:
+  load_in_4bit: false
+  load_in_8bit: false
+
+data:
+  train_path: "tatsu-lab/alpaca"
+  format: "alpaca"
+  input_field: "instruction"
+  output_field: "output"
+  context_field: "input"
+  test_size: 0.05
+  seed: 42
+  streaming: false
+  num_workers: 4
+  cleaning:
+    enabled: true
+    quality_preset: "strict"       # Strict cleaning for full fine-tune (every sample matters)
+    unicode_fix: true
+    heuristic_filter: true
+    min_word_count: 10
+    max_word_count: 50000
+    alpha_ratio_threshold: 0.7
+    symbol_to_word_ratio: 0.08
+    dedup_enabled: true
+    dedup_tiers:
+      - "exact"
+      - "fuzzy"
+    dedup_jaccard_threshold: 0.80
+    dedup_num_perm: 128
+    dedup_shingle_size: 5
+    toxicity_filter: true
+    toxicity_threshold: 0.7
+    pii_redaction: false
+
+training:
+  mode: "full"
+  output_dir: "outputs/full-smollm2-135m"
+  num_epochs: 3
+  per_device_train_batch_size: 8
+  per_device_eval_batch_size: 8
+  gradient_accumulation_steps: 2
+  learning_rate: 5.0e-5           # Lower LR for full fine-tuning stability
+  weight_decay: 0.01
+  warmup_ratio: 0.05
+  lr_scheduler_type: "cosine"
+  max_grad_norm: 1.0
+  logging_steps: 10
+  eval_strategy: "epoch"
+  save_steps: 500
+  save_total_limit: 3
+  bf16: true
+  fp16: false
+  gradient_checkpointing: false
+  optim: "adamw_torch"
+  group_by_length: true
+  report_to:
+    - "wandb"
+
+distributed:
+  enabled: false                  # Set to true and increase num_gpus for multi-GPU
+  framework: "deepspeed"
+  num_gpus: 1
+  deepspeed_stage: 2              # ZeRO-2: shard optimizer + gradients
+  deepspeed_offload: false
+
+evaluation:
+  enabled: true
+  benchmarks:
+    - "hellaswag"
+    - "arc_easy"
+    - "mmlu"
+  num_fewshot: 0
+  batch_size: 8
+  generate_report: true
+
+serving:
+  backend: "gradio"
+  port: 7860
+  merge_adapter: false            # No adapter to merge for full fine-tune

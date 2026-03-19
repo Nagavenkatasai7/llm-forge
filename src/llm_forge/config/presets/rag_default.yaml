@@ -1,0 +1,137 @@
+# =============================================================================
+# llm-forge preset: rag_default
+# =============================================================================
+# Retrieval-Augmented Generation pipeline configuration.
+#
+# This preset fine-tunes a model with LoRA and sets up a RAG pipeline that:
+#   - Chunks documents using semantic (sentence-boundary-aware) splitting
+#   - Embeds chunks with a MiniLM sentence-transformer
+#   - Stores vectors in ChromaDB (local, serverless)
+#   - Performs hybrid search (dense + BM25 sparse) for retrieval
+#   - Optionally re-ranks with a cross-encoder
+#
+# Suitable for building domain-specific Q&A systems over a knowledge base.
+# =============================================================================
+
+model:
+  name: "meta-llama/Llama-3.2-1B"
+  torch_dtype: "bf16"
+  max_seq_length: 4096            # Longer context for RAG (retrieval + generation)
+  attn_implementation: "flash_attention_2"
+  trust_remote_code: false
+
+lora:
+  r: 16
+  alpha: 32
+  dropout: 0.05
+  target_modules:
+    - "q_proj"
+    - "k_proj"
+    - "v_proj"
+    - "o_proj"
+    - "gate_proj"
+    - "up_proj"
+    - "down_proj"
+  bias: "none"
+  task_type: "CAUSAL_LM"
+  use_rslora: false
+  use_dora: false
+
+quantization:
+  load_in_4bit: true
+  load_in_8bit: false
+  bnb_4bit_compute_dtype: "bf16"
+  bnb_4bit_quant_type: "nf4"
+  bnb_4bit_use_double_quant: true
+
+data:
+  train_path: "tatsu-lab/alpaca"
+  format: "alpaca"
+  input_field: "instruction"
+  output_field: "output"
+  context_field: "input"
+  test_size: 0.05
+  seed: 42
+  streaming: false
+  num_workers: 4
+  cleaning:
+    enabled: true
+    quality_preset: "strict"      # Strict cleaning for RAG (quality retrieval depends on it)
+    unicode_fix: true
+    heuristic_filter: true
+    min_word_count: 10
+    max_word_count: 50000
+    alpha_ratio_threshold: 0.7
+    symbol_to_word_ratio: 0.08
+    dedup_enabled: true
+    dedup_tiers:
+      - "exact"
+      - "fuzzy"
+      - "semantic"                # Semantic dedup matters for RAG knowledge bases
+    dedup_jaccard_threshold: 0.80
+    dedup_num_perm: 128
+    dedup_shingle_size: 5
+    semantic_dedup_enabled: true
+    semantic_dedup_threshold: 0.92
+    semantic_dedup_model: "sentence-transformers/all-MiniLM-L6-v2"
+    toxicity_filter: true
+    toxicity_threshold: 0.7
+    pii_redaction: true
+    pii_entities:
+      - "PERSON"
+      - "EMAIL_ADDRESS"
+      - "PHONE_NUMBER"
+      - "CREDIT_CARD"
+      - "US_SSN"
+      - "IP_ADDRESS"
+
+training:
+  mode: "qlora"
+  output_dir: "outputs/rag-llama3.2-1b"
+  num_epochs: 3
+  per_device_train_batch_size: 2
+  per_device_eval_batch_size: 2
+  gradient_accumulation_steps: 8
+  learning_rate: 2.0e-4
+  weight_decay: 0.01
+  warmup_ratio: 0.03
+  lr_scheduler_type: "cosine"
+  max_grad_norm: 1.0
+  logging_steps: 10
+  eval_strategy: "epoch"
+  save_steps: 500
+  save_total_limit: 3
+  bf16: true
+  fp16: false
+  gradient_checkpointing: true
+  optim: "paged_adamw_8bit"
+  group_by_length: true
+  report_to:
+    - "wandb"
+
+rag:
+  enabled: true
+  knowledge_base_path: "data/knowledge_base"  # Directory with PDFs, .txt, .md, .docx
+  chunk_strategy: "semantic"                   # Sentence-boundary-aware splitting
+  chunk_size: 512                              # ~512 tokens per chunk
+  chunk_overlap: 64                            # 64 token overlap between chunks
+  embedding_model: "sentence-transformers/all-MiniLM-L6-v2"
+  vectorstore: "chromadb"                      # Local vector store, no server needed
+  top_k: 5                                     # Retrieve top-5 chunks per query
+  reranker_model: "cross-encoder/ms-marco-MiniLM-L-6-v2"
+  hybrid_search: true                          # Combine dense retrieval with BM25
+  similarity_threshold: 0.65                   # Drop chunks below this cosine similarity
+
+evaluation:
+  enabled: true
+  benchmarks:
+    - "hellaswag"
+    - "arc_easy"
+  num_fewshot: 0
+  batch_size: 4
+  generate_report: true
+
+serving:
+  backend: "gradio"
+  port: 7860
+  merge_adapter: true

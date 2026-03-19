@@ -1,0 +1,65 @@
+# llm-forge: Medical Domain Fine-Tuning Configuration
+# Fine-tune a model on medical/clinical data.
+# Run: llm-forge train --config configs/example_medical_domain.yaml
+
+model:
+  name: "meta-llama/Llama-3.2-1B"
+  max_seq_length: 4096                       # Longer context for medical docs
+  attn_implementation: "flash_attention_2"
+  torch_dtype: "bf16"
+
+lora:
+  r: 32                                      # Higher rank for domain specialization
+  alpha: 64
+  dropout: 0.05
+  target_modules:
+    - q_proj
+    - k_proj
+    - v_proj
+    - o_proj
+    - gate_proj
+    - up_proj
+    - down_proj
+
+data:
+  train_path: "./data/medical_train.jsonl"
+  format: "alpaca"
+  system_prompt: "You are a medical knowledge assistant. Provide accurate, evidence-based information. This is for educational purposes only and not medical advice."
+  test_size: 0.1
+  cleaning:
+    enabled: true
+    quality_preset: "strict"                  # Strict for medical accuracy
+    unicode_fix: true
+    language_filter: ["en"]
+    pii_redaction: true                       # Critical for medical data
+    pii_entities:
+      - PHONE_NUMBER
+      - EMAIL_ADDRESS
+      - US_SSN
+      - CREDIT_CARD
+      - IP_ADDRESS
+    toxicity_filter: false                    # Medical content may trigger false positives
+    dedup_enabled: true
+
+training:
+  mode: "lora"
+  output_dir: "./output/medical-llm"
+  num_epochs: 5
+  per_device_train_batch_size: 2
+  gradient_accumulation_steps: 8
+  learning_rate: 1.0e-4                       # Lower LR for domain specialization
+  lr_scheduler_type: "cosine"
+  warmup_ratio: 0.05
+  gradient_checkpointing: true
+  bf16: true
+
+evaluation:
+  enabled: true
+  custom_eval_path: "./data/medical_eval.jsonl"
+  benchmarks:
+    - mmlu
+
+serving:
+  backend: "gradio"
+  export_format: "safetensors"
+  merge_adapter: true

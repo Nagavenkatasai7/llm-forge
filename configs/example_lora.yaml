@@ -1,0 +1,61 @@
+# llm-forge: LoRA Fine-Tuning Configuration
+# Fine-tune a base model using LoRA on your custom dataset.
+# Run: llm-forge train --config configs/example_lora.yaml
+
+model:
+  name: "meta-llama/Llama-3.2-1B"       # Base model from HuggingFace
+  max_seq_length: 2048                    # Context window length
+  attn_implementation: "flash_attention_2"
+  torch_dtype: "bf16"
+
+lora:
+  r: 16                                   # LoRA rank (higher = more capacity)
+  alpha: 32                                # Scaling factor (typically 2x rank)
+  dropout: 0.05
+  target_modules:
+    - q_proj
+    - k_proj
+    - v_proj
+    - o_proj
+    - gate_proj
+    - up_proj
+    - down_proj
+
+data:
+  train_path: "./data/train.jsonl"         # Your training data
+  format: "alpaca"                          # alpaca | sharegpt | completion | custom
+  test_size: 0.1
+  cleaning:
+    enabled: true
+    quality_preset: "balanced"
+    unicode_fix: true
+    language_filter: ["en"]
+    dedup_enabled: true
+    pii_redaction: true
+
+training:
+  mode: "lora"
+  output_dir: "./output/my-lora"
+  num_epochs: 3
+  per_device_train_batch_size: 4
+  gradient_accumulation_steps: 4
+  learning_rate: 2.0e-4
+  lr_scheduler_type: "cosine"
+  warmup_ratio: 0.03
+  gradient_checkpointing: true
+  bf16: true
+  neftune_noise_alpha: 5.0
+  save_steps: 500
+  logging_steps: 10
+
+evaluation:
+  enabled: true
+  benchmarks:
+    - hellaswag
+    - arc_easy
+    - winogrande
+
+serving:
+  backend: "gradio"
+  export_format: "safetensors"
+  merge_adapter: true
