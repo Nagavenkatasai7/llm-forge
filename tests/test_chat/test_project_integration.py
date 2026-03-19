@@ -56,7 +56,8 @@ class TestDetectTriggersOnEmptyDir:
             patch("llm_forge.chat.ui._print_setup_plan"),
             patch("llm_forge.chat.ui._print_success"),
             patch("builtins.input", return_value="n"),
-            patch("llm_forge.chat.engine.ChatEngine") as mock_engine_cls,
+            patch("llm_forge.chat.ui.ChatEngine") as mock_engine_cls,
+            patch("llm_forge.chat.ui._print_response"),
             patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-test"}, clear=True),
         ):
             mock_detect.return_value = {
@@ -74,16 +75,19 @@ class TestDetectTriggersOnEmptyDir:
                 "mode": "root",
                 "total_size_estimate": 0,
             }
-            # Make the engine mock behave enough to not crash
             engine_instance = MagicMock()
             engine_instance.provider = "anthropic"
             engine_instance.send.return_value = "Hello!"
+            engine_instance.memory = MagicMock()
+            engine_instance.memory.db_path = "/tmp/fake.db"
             mock_engine_cls.return_value = engine_instance
 
             from llm_forge.chat.ui import launch_chat
 
-            # Patch _get_input to immediately quit
-            with patch("llm_forge.chat.ui._get_input", return_value="quit"):
+            with (
+                patch("llm_forge.chat.ui._get_input", return_value="quit"),
+                patch("llm_forge.chat.ui._stream_response"),
+            ):
                 launch_chat()
 
             mock_detect.assert_called_once_with(".")
@@ -101,7 +105,7 @@ class TestDetectTriggersOnEmptyDir:
             patch("llm_forge.chat.ui._print_setup_plan"),
             patch("llm_forge.chat.ui._print_success"),
             patch("builtins.input", return_value="y"),
-            patch("llm_forge.chat.engine.ChatEngine") as mock_engine_cls,
+            patch("llm_forge.chat.ui.ChatEngine") as mock_engine_cls,
             patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-test"}, clear=True),
         ):
             mock_detect.return_value = {
@@ -134,7 +138,10 @@ class TestDetectTriggersOnEmptyDir:
 
             from llm_forge.chat.ui import launch_chat
 
-            with patch("llm_forge.chat.ui._get_input", return_value="quit"):
+            with (
+                patch("llm_forge.chat.ui._get_input", return_value="quit"),
+                patch("llm_forge.chat.ui._stream_response"),
+            ):
                 launch_chat()
 
             mock_scaffold.assert_called_once_with(".")
@@ -168,7 +175,7 @@ class TestDetectSkipsLlmforgeDir:
             patch("llm_forge.chat.ui.detect_project_type") as mock_detect,
             patch("llm_forge.chat.ui.scaffold_project") as mock_scaffold,
             patch("llm_forge.chat.ui._print_banner"),
-            patch("llm_forge.chat.engine.ChatEngine") as mock_engine_cls,
+            patch("llm_forge.chat.ui.ChatEngine") as mock_engine_cls,
             patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-test"}, clear=True),
         ):
             mock_detect.return_value = {
@@ -187,7 +194,10 @@ class TestDetectSkipsLlmforgeDir:
 
             from llm_forge.chat.ui import launch_chat
 
-            with patch("llm_forge.chat.ui._get_input", return_value="quit"):
+            with (
+                patch("llm_forge.chat.ui._get_input", return_value="quit"),
+                patch("llm_forge.chat.ui._stream_response"),
+            ):
                 launch_chat()
 
             mock_scaffold.assert_not_called()

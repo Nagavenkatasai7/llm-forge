@@ -111,7 +111,7 @@ mkdir -p "$INSTALL_DIR/bin"
 
 echo -e "${DIM}Installing LLM Forge from PyPI...${RESET}"
 "$INSTALL_DIR/venv/bin/pip" install --upgrade pip -q 2>/dev/null
-"$INSTALL_DIR/venv/bin/pip" install llm-forge-new -q
+"$INSTALL_DIR/venv/bin/pip" install "llm-forge-new[chat]" -q
 
 if ! "$INSTALL_DIR/venv/bin/python" -c "import llm_forge" 2>/dev/null; then
     echo -e "${RED}Installation failed. Please report:${RESET}"

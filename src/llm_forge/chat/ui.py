@@ -354,7 +354,44 @@ def launch_chat(provider: str | None = None) -> None:
     except ImportError:
         pass
 
-    # Send initial greeting — tells Claude to check project state and memories
+    # Check if anthropic is installed when using anthropic provider
+    if engine.provider == "anthropic":
+        try:
+            import anthropic  # noqa: F401
+        except ImportError:
+            _print_error(
+                "The 'anthropic' package is not installed.\n"
+                "  Run: pip install anthropic\n"
+                "  Or:  pip install llm-forge-new[chat]"
+            )
+            # Try to auto-install
+            try:
+                from rich.console import Console
+
+                Console().print("\n[bold]Install it now?[/bold] [dim](Y/n)[/dim] ", end="")
+                answer = input().strip().lower()
+            except (ImportError, EOFError):
+                answer = input("Install it now? (Y/n) ").strip().lower()
+
+            if answer in ("", "y", "yes"):
+                import subprocess
+                import sys
+
+                _print_info("Installing anthropic SDK...")
+                subprocess.run(
+                    [sys.executable, "-m", "pip", "install", "anthropic", "-q"],
+                    check=False,
+                )
+                _print_success("Installed! Reconnecting...")
+                engine = ChatEngine(provider="anthropic", project_dir=".")
+            else:
+                _print_info("Launching free wizard instead.")
+                from llm_forge.chat.wizard_fallback import launch_wizard_fallback
+
+                launch_wizard_fallback()
+                return
+
+    # Send initial greeting
     try:
         greeting = engine.send(
             "The user just launched llm-forge. Check the project state and session history. "
@@ -364,12 +401,11 @@ def launch_chat(provider: str | None = None) -> None:
         )
         _print_response(greeting)
     except Exception as e:
-        try:
-            from rich.console import Console
+        _print_error(f"Error connecting to API: {e}")
+        _print_info("Falling back to free wizard. You can try again later with an API key.")
+        from llm_forge.chat.wizard_fallback import launch_wizard_fallback
 
-            Console().print(f"[red]Error connecting to API:[/red] {e}")
-        except ImportError:
-            print(f"Error connecting to API: {e}")
+        launch_wizard_fallback()
         return
 
     # Main conversation loop with streaming + Esc interrupt
@@ -399,12 +435,9 @@ def launch_chat(provider: str | None = None) -> None:
                 print("\n[interrupted — type your new instruction]\n")
             continue
         except Exception as e:
-            try:
-                from rich.console import Console
-
-                Console().print(f"[red]Error:[/red] {e}")
-            except ImportError:
-                print(f"Error: {e}")
+            _print_error(f"{e}")
+            _print_info("Something went wrong. You can keep chatting or type 'quit' to exit.")
+            continue
 
 
 def _shutdown(engine: ChatEngine) -> None:
