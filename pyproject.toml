@@ -51,6 +51,10 @@ rag = [
     "faiss-cpu>=1.8",
     "rank-bm25>=0.2",
 ]
+chat = [
+    "anthropic>=0.40",
+    "openai>=1.50",
+]
 serve = [
     "gradio>=5.0",
     "fastapi>=0.115",
@@ -92,6 +96,7 @@ dev = [
     "pre-commit",
 ]
 all = [
+    "llm-forge-new[chat]",
     "llm-forge-new[rag]",
     "llm-forge-new[serve]",
     "llm-forge-new[desktop]",

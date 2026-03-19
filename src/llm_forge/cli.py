@@ -33,7 +33,8 @@ app = typer.Typer(
     help="Config-driven LLM training platform",
     add_completion=False,
     rich_markup_mode="rich",
-    no_args_is_help=True,
+    no_args_is_help=False,
+    invoke_without_command=True,
 )
 
 rag_app = typer.Typer(
@@ -201,8 +202,9 @@ def _print_config_summary(config: object) -> None:
 # ---------------------------------------------------------------------------
 
 
-@app.callback()
+@app.callback(invoke_without_command=True)
 def main(
+    ctx: typer.Context,
     version: bool = typer.Option(
         False,
         "--version",
@@ -211,8 +213,19 @@ def main(
         callback=_version_callback,
         is_eager=True,
     ),
+    provider: str | None = typer.Option(
+        None,
+        "--provider",
+        help="LLM provider for chat: anthropic, openai, or ollama.",
+        hidden=True,
+    ),
 ) -> None:
-    """llm-forge: Config-driven LLM training platform."""
+    """Build your own AI model. Just type llm-forge and start talking."""
+    if ctx.invoked_subcommand is None:
+        # No subcommand → launch conversational assistant
+        from llm_forge.chat.ui import launch_chat
+
+        launch_chat(provider=provider)
 
 
 # ---------------------------------------------------------------------------
