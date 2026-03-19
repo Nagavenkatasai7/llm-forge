@@ -389,5 +389,6 @@ class TestCommandRegistry:
             "/auto",
             "/quit",
             "/version",
+            "/model",
         }
         assert set(COMMANDS.keys()) == expected

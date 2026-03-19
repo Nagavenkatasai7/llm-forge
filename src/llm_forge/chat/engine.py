@@ -40,16 +40,55 @@ def _get_anthropic_client():
     return anthropic.Anthropic()
 
 
-def _call_anthropic(messages: list[dict], system: str, client=None) -> dict:
+# Available Claude models for user selection
+CLAUDE_MODELS = {
+    "opus-4.6": {
+        "id": "claude-opus-4-6",
+        "name": "Claude Opus 4.6",
+        "context": "200K (1M beta)",
+        "cost": "$5/$25",
+    },
+    "sonnet-4.6": {
+        "id": "claude-sonnet-4-6",
+        "name": "Claude Sonnet 4.6",
+        "context": "200K (1M beta)",
+        "cost": "$3/$15",
+    },
+    "haiku-4.5": {
+        "id": "claude-haiku-4-5",
+        "name": "Claude Haiku 4.5",
+        "context": "200K",
+        "cost": "$1/$5",
+    },
+    "opus-4.5": {
+        "id": "claude-opus-4-5",
+        "name": "Claude Opus 4.5",
+        "context": "200K",
+        "cost": "$5/$25",
+    },
+    "sonnet-4.5": {
+        "id": "claude-sonnet-4-5",
+        "name": "Claude Sonnet 4.5",
+        "context": "200K",
+        "cost": "$3/$15",
+    },
+}
+
+DEFAULT_MODEL = "sonnet-4.6"
+
+
+def _call_anthropic(
+    messages: list[dict], system: str, client=None, model_key: str | None = None
+) -> dict:
     """Call Claude API with tool use. Returns the API response."""
     if client is None:
         client = _get_anthropic_client()
 
+    model_id = CLAUDE_MODELS.get(model_key or DEFAULT_MODEL, CLAUDE_MODELS[DEFAULT_MODEL])["id"]
+
     response = client.messages.create(
-        # claude-sonnet-4-5 is the correct model ID (released after training
-        # data cutoff; verified against current Anthropic API).
-        model="claude-sonnet-4-5",
-        max_tokens=4096,
+        model=model_id,
+        max_tokens=16000,
         system=system,
         tools=TOOLS,
         messages=messages,
@@ -58,7 +97,12 @@ def _call_anthropic(messages: list[dict], system: str, client=None) -> dict:
 
 
 def _stream_anthropic(
-    messages: list[dict], system: str, client=None, on_text=None, interrupt_check=None
+    messages: list[dict],
+    system: str,
+    client=None,
+    on_text=None,
+    interrupt_check=None,
+    model_key: str | None = None,
 ):
     """Stream Claude API response. Calls on_text(chunk) for each text chunk.
 
@@ -68,10 +112,11 @@ def _stream_anthropic(
     if client is None:
         client = _get_anthropic_client()
 
+    model_id = CLAUDE_MODELS.get(model_key or DEFAULT_MODEL, CLAUDE_MODELS[DEFAULT_MODEL])["id"]
     collected_text: list[str] = []
 
     with client.messages.stream(
-        model="claude-sonnet-4-5",  # Correct model ID (released after training cutoff)
+        model=model_id,
         max_tokens=4096,
         system=system,
         tools=TOOLS,
@@ -157,12 +202,22 @@ def _call_openai(messages: list[dict], system: str) -> dict:
 class ChatEngine:
     """Manages the conversation loop with integrated memory system."""
 
-    def __init__(self, provider: str | None = None, project_dir: str | None = None):
+    def __init__(
+        self,
+        provider: str | None = None,
+        project_dir: str | None = None,
+        model_key: str | None = None,
+    ):
         self.provider = provider or _get_provider()
+        self.model_key = model_key or DEFAULT_MODEL
         self.messages: list[dict] = []
         self.memory = MemoryManager(project_dir=project_dir or ".")
         self.permissions = PermissionSystem(auto_approve=True)
         self._client = None
+
+        # Optional UI callback: called with (tool_name, input_data) before
+        # each tool execution so the UI can display progress indicators.
+        self.on_tool_start: callable | None = None
 
         # Build dynamic system prompt with memory context
         self.system = self._build_system_prompt()
@@ -222,25 +277,28 @@ class ChatEngine:
         while True:
             if self.provider == "anthropic":
                 if on_text and not interrupt_check:
-                    # Streaming without interrupt
                     response = _stream_anthropic(
                         self.messages,
                         self.system,
                         client=self._get_client(),
                         on_text=on_text,
+                        model_key=self.model_key,
                     )
                 elif on_text and interrupt_check:
-                    # Streaming with interrupt support
                     response = _stream_anthropic(
                         self.messages,
                         self.system,
                         client=self._get_client(),
                         on_text=on_text,
                         interrupt_check=interrupt_check,
+                        model_key=self.model_key,
                     )
                 else:
                     response = _call_anthropic(
-                        self.messages, self.system, client=self._get_client()
+                        self.messages,
+                        self.system,
+                        client=self._get_client(),
+                        model_key=self.model_key,
                     )
                 text, tool_calls = self._parse_anthropic_response(response)
             elif self.provider == "openai":
@@ -290,6 +348,13 @@ class ChatEngine:
         install_package, fetch_url) are gated by the PermissionSystem before
         being dispatched.
         """
+        # Notify UI callback (if registered) so it can display a progress line
+        if self.on_tool_start is not None:
+            try:
+                self.on_tool_start(name, input_data)
+            except Exception:
+                pass  # Never let a UI callback break tool execution
+
         # Memory-specific tools
         if name == "save_memory":
             return self.memory.save_memory(

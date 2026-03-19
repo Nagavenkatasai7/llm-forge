@@ -259,6 +259,55 @@ def _cmd_version(engine: ChatEngine, args: str) -> str:
     return f"llm-forge v{__version__}"
 
 
+def _cmd_model(engine: ChatEngine, args: str) -> str:
+    """Show current model or switch to a different one."""
+    from llm_forge.chat.engine import CLAUDE_MODELS
+
+    args = args.strip().lower()
+
+    # No argument — show current model and available options
+    if not args:
+        current = CLAUDE_MODELS.get(engine.model_key, {})
+        lines = [
+            f"Current model: {current.get('name', engine.model_key)}",
+            f"  ID: {current.get('id', '?')}",
+            f"  Context: {current.get('context', '?')}",
+            f"  Cost: {current.get('cost', '?')} per 1M tokens",
+            "",
+            "Available models:",
+        ]
+        for key, info in CLAUDE_MODELS.items():
+            marker = " <-- active" if key == engine.model_key else ""
+            lines.append(
+                f"  {key:<14} {info['name']:<22} {info['context']:<18} {info['cost']}{marker}"
+            )
+        lines.append("")
+        lines.append("Switch with: /model <key>  (e.g. /model opus-4.6)")
+        return "\n".join(lines)
+
+    # Shortcuts: allow partial matches
+    shortcuts = {
+        "opus": "opus-4.6",
+        "sonnet": "sonnet-4.6",
+        "haiku": "haiku-4.5",
+        "opus4.6": "opus-4.6",
+        "sonnet4.6": "sonnet-4.6",
+        "haiku4.5": "haiku-4.5",
+        "opus-4.5": "opus-4.5",
+        "sonnet-4.5": "sonnet-4.5",
+        "opus4.5": "opus-4.5",
+        "sonnet4.5": "sonnet-4.5",
+    }
+    resolved = shortcuts.get(args, args)
+
+    if resolved not in CLAUDE_MODELS:
+        return f"Unknown model: {args}\nAvailable: {', '.join(CLAUDE_MODELS.keys())}"
+
+    engine.model_key = resolved
+    info = CLAUDE_MODELS[resolved]
+    return f"Switched to {info['name']} ({info['context']}, {info['cost']} per 1M tokens)"
+
+
 # ---------------------------------------------------------------------------
 # Command registry
 # ---------------------------------------------------------------------------
@@ -283,6 +332,10 @@ COMMANDS: dict[str, dict] = {
     "/auto": {"description": "Toggle auto-approve mode for permissions", "handler": _cmd_auto},
     "/quit": {"description": "Exit the chat session", "handler": _cmd_quit},
     "/version": {"description": "Show llm-forge version", "handler": _cmd_version},
+    "/model": {
+        "description": "Show or switch Claude model (e.g. /model opus-4.6)",
+        "handler": _cmd_model,
+    },
 }
 
 
