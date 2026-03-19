@@ -95,6 +95,7 @@ dev = [
     "ruff>=0.7",
     "mypy>=1.12",
     "pre-commit",
+    "anthropic>=0.40",
 ]
 all = [
     "llm-forge-new[chat]",
