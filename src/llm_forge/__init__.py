@@ -1,3 +1,3 @@
 """llm-forge: Config-driven, YAML-first open-source LLM training platform."""
 
-__version__ = "0.4.1"
+__version__ = "0.5.0"

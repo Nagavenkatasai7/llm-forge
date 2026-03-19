@@ -13,9 +13,11 @@ arguments against a blocked-patterns list before execution.
 from __future__ import annotations
 
 import importlib.metadata
+import ipaddress
 import json
 import os
 import re
+import socket
 import subprocess
 import sys
 import urllib.error
@@ -84,8 +86,7 @@ _BINARY_EXTENSIONS: frozenset[str] = frozenset(
 
 # Shell commands/patterns that are always blocked.
 _BLOCKED_COMMAND_PATTERNS: list[re.Pattern[str]] = [
-    re.compile(r"\brm\s+(-\w*\s+)*-\w*r\w*\s+/\s*$"),  # rm -rf /
-    re.compile(r"\brm\s+(-\w*\s+)*-\w*r\w*\s+/\s*$"),  # rm -rf /
+    re.compile(r"\brm\s+(-\w*\s+)*-\w*r\w*\s+/\s*"),  # rm -rf /
     re.compile(r"\bsudo\b"),
     re.compile(r"\bshutdown\b"),
     re.compile(r"\breboot\b"),
@@ -93,10 +94,16 @@ _BLOCKED_COMMAND_PATTERNS: list[re.Pattern[str]] = [
     re.compile(r"\bdd\b\s+.*\bof=/dev/"),
     re.compile(r"\bchmod\s+777\b"),
     re.compile(r"\b>\s*/dev/sd[a-z]"),
-    re.compile(r"\brm\s+(-\w*\s+)*-\w*r\w*\s+~\s*$"),  # rm -rf ~
+    re.compile(r"\brm\s+(-\w*\s+)*-\w*r\w*\s+~\s*"),  # rm -rf ~
     re.compile(r"\brm\s+(-\w*\s+)*-\w*r\w*\s+/home\b"),
     re.compile(r"\brm\s+(-\w*\s+)*-\w*r\w*\s+/Users\b"),
     re.compile(r":\(\)\s*\{\s*:\|:&\s*\}\s*;"),  # fork bomb
+    re.compile(r"--no-preserve-root"),  # rm --no-preserve-root bypass
+    re.compile(r"\$\("),  # subshell injection via $(...)
+    re.compile(r"`[^`]+`"),  # subshell injection via backticks
+    # Block command chaining with dangerous commands
+    re.compile(r"[;&|]+\s*(?:rm|sudo|shutdown|reboot|mkfs)\b"),
+    re.compile(r"\b(?:rm|sudo|shutdown|reboot|mkfs)\b.*[;&|]+"),
 ]
 
 # Known malicious PyPI packages.
@@ -596,7 +603,7 @@ def install_package(package_name: str) -> str:
         )
 
     # Security: blocked packages
-    base_name = re.split(r"[<>=!~\[]", name)[0].strip().lower()
+    base_name = re.split(r"[<>=!~\[@]", name)[0].strip().lower()
     if base_name in _BLOCKED_PACKAGES:
         return json.dumps(
             {
@@ -689,6 +696,30 @@ def fetch_url(url: str, output_path: str | None = None) -> str:
             {
                 "error": "Localhost URLs are not allowed for security reasons.",
                 "status": "blocked",
+            }
+        )
+
+    # Security: block private/link-local IPs (SSRF protection)
+    try:
+        addrinfos = socket.getaddrinfo(hostname, None)
+        for _family, _type, _proto, _canonname, sockaddr in addrinfos:
+            ip_str = sockaddr[0]
+            addr = ipaddress.ip_address(ip_str)
+            if addr.is_private or addr.is_link_local or addr.is_loopback or addr.is_reserved:
+                return json.dumps(
+                    {
+                        "error": (
+                            f"URL resolves to private/reserved IP ({ip_str}). "
+                            "Blocked to prevent SSRF attacks."
+                        ),
+                        "status": "blocked",
+                    }
+                )
+    except socket.gaierror:
+        return json.dumps(
+            {
+                "error": f"Could not resolve hostname: {hostname}",
+                "status": "error",
             }
         )
 

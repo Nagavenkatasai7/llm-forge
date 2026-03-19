@@ -383,7 +383,10 @@ def launch_wizard_fallback() -> None:  # noqa: C901 — intentionally linear wiz
     system_prompt = selected_purpose["system_prompt"]
     if selected_purpose["key"] == "custom":
         cprint("[bold]Enter a custom system prompt[/bold] (or press Enter for default):")
-        user_prompt = input("  > ").strip()
+        try:
+            user_prompt = input("  > ").strip()
+        except (EOFError, KeyboardInterrupt):
+            user_prompt = ""
         if user_prompt:
             system_prompt = user_prompt
 
@@ -402,12 +405,18 @@ def launch_wizard_fallback() -> None:  # noqa: C901 — intentionally linear wiz
 
     if data_choice == 1:
         cprint("\n  Enter the HuggingFace dataset ID:")
-        data_path = input("  > ").strip() or "tatsu-lab/alpaca"
+        try:
+            data_path = input("  > ").strip() or "tatsu-lab/alpaca"
+        except (EOFError, KeyboardInterrupt):
+            data_path = "tatsu-lab/alpaca"
         data_format = "alpaca"
         cprint(f"  Using: [bold]{data_path}[/bold]")
     elif data_choice == 2:
         cprint("\n  Enter the path to your data file or folder:")
-        data_path = input("  > ").strip()
+        try:
+            data_path = input("  > ").strip()
+        except (EOFError, KeyboardInterrupt):
+            data_path = ""
         if not data_path:
             cprint("  [yellow]No path entered -- falling back to sample dataset.[/yellow]")
             data_path = "tatsu-lab/alpaca"
@@ -491,7 +500,10 @@ def launch_wizard_fallback() -> None:  # noqa: C901 — intentionally linear wiz
     cprint(f"  Reason: {rec['description']}")
 
     cprint("\n  [dim]Press Enter to accept, or type a HuggingFace model name to override:[/dim]")
-    override = input("  > ").strip()
+    try:
+        override = input("  > ").strip()
+    except (EOFError, KeyboardInterrupt):
+        override = ""
     model_name = override if override else rec["name"]
     training_mode = rec["mode"]
     batch_size = rec["batch_size"]
@@ -597,7 +609,10 @@ def launch_wizard_fallback() -> None:  # noqa: C901 — intentionally linear wiz
 def _prompt_int(message: str, low: int, high: int, *, default: int = 1) -> int:
     """Prompt for an integer in [low, high] with a default."""
     while True:
-        raw = input(f"  {message} [{default}]: ").strip()
+        try:
+            raw = input(f"  {message} [{default}]: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            return default
         if not raw:
             return default
         try:

@@ -97,6 +97,8 @@ def _print_banner() -> None:
         banner.append(" - Build your own AI model\n", style="dim")
         banner.append("Just tell me what you want to build.\n\n", style="")
         banner.append("Type ", style="dim")
+        banner.append("/help", style="bold yellow")
+        banner.append(" for commands, ", style="dim")
         banner.append("quit", style="bold red")
         banner.append(" to exit.", style="dim")
 
@@ -106,7 +108,7 @@ def _print_banner() -> None:
         print("=" * 50)
         print("  LLM Forge - Build your own AI model")
         print("  Just tell me what you want to build.")
-        print("  Type 'quit' to exit.")
+        print("  Type '/help' for commands, 'quit' to exit.")
         print("=" * 50)
         print()
 
@@ -130,6 +132,7 @@ def _print_response(text: str) -> None:
 
 def _check_esc_pressed() -> bool:
     """Non-blocking check if Esc key was pressed."""
+    old_settings = None
     try:
         import select
         import sys
@@ -146,7 +149,8 @@ def _check_esc_pressed() -> bool:
                 if ch == "\x1b":  # Esc key
                     return True
         finally:
-            termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old_settings)
+            if old_settings is not None:
+                termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old_settings)
     except Exception:
         pass
     return False
@@ -214,20 +218,46 @@ def _get_input() -> str:
         return input("You: ")
 
 
-def _setup_api_key(engine: ChatEngine, provider: str | None) -> ChatEngine:
-    """Handle API key setup: load saved key, ask user, or fall back to wizard."""
+def _persist_api_key(key: str) -> None:
+    """Write a validated API key to disk for future sessions."""
+    from pathlib import Path
+
+    llmforge_dir = Path(".llmforge")
+    key_file = llmforge_dir / ".api_key"
+    llmforge_dir.mkdir(parents=True, exist_ok=True)
+    key_file.write_text(key)
+    key_file.chmod(0o600)  # Read/write only for owner
+
+    try:
+        from rich.console import Console
+
+        Console().print(
+            "[green]API key verified and saved! You won't need to enter it again.[/green]\n"
+        )
+    except ImportError:
+        print("API key verified and saved! You won't need to enter it again.\n")
+
+
+def _setup_api_key(engine: ChatEngine, provider: str | None) -> tuple[ChatEngine, str | None]:
+    """Handle API key setup: load saved key, ask user, or fall back to wizard.
+
+    Returns ``(engine, pending_key)`` where *pending_key* is non-None only
+    when the user just pasted a brand-new key that has NOT yet been persisted
+    to disk.  The caller should persist it after the key is proven valid
+    (e.g. after a successful greeting).
+    """
     import os
     from pathlib import Path
 
     llmforge_dir = Path(".llmforge")
     key_file = llmforge_dir / ".api_key"
 
-    # Try loading saved key
+    # Try loading saved key (already validated in a prior session)
     if key_file.exists():
         saved_key = key_file.read_text().strip()
         if saved_key:
             os.environ["ANTHROPIC_API_KEY"] = saved_key
-            return ChatEngine(provider="anthropic", project_dir=".")
+            return ChatEngine(provider="anthropic", project_dir="."), None
 
     # Ask the user
     try:
@@ -248,20 +278,18 @@ def _setup_api_key(engine: ChatEngine, provider: str | None) -> ChatEngine:
         user_key = input("Paste your API key (or press Enter to skip): ").strip()
 
     if user_key:
-        # Save the key securely
+        # Set the key in the environment but do NOT write to disk yet —
+        # it will be persisted after the first successful API call.
         os.environ["ANTHROPIC_API_KEY"] = user_key
-        llmforge_dir.mkdir(parents=True, exist_ok=True)
-        key_file.write_text(user_key)
-        key_file.chmod(0o600)  # Read/write only for owner
 
         try:
             from rich.console import Console
 
-            Console().print("[green]API key saved! You won't need to enter it again.[/green]\n")
+            Console().print("[dim]Key accepted. Validating with the API...[/dim]\n")
         except ImportError:
-            print("API key saved! You won't need to enter it again.\n")
+            print("Key accepted. Validating with the API...\n")
 
-        return ChatEngine(provider="anthropic", project_dir=".")
+        return ChatEngine(provider="anthropic", project_dir="."), user_key
     else:
         # User skipped — offer free wizard
         try:
@@ -324,8 +352,9 @@ def launch_chat(provider: str | None = None) -> None:
     engine = ChatEngine(provider=provider, project_dir=".")
 
     # If no API key, try to load saved key or ask the user
+    _pending_api_key: str | None = None
     if engine.provider == "none":
-        engine = _setup_api_key(engine, provider)
+        engine, _pending_api_key = _setup_api_key(engine, provider)
 
     # Show memory status
     try:
@@ -408,6 +437,11 @@ def launch_chat(provider: str | None = None) -> None:
         launch_wizard_fallback()
         return
 
+    # The greeting succeeded, so the API key is valid — persist it now.
+    if _pending_api_key:
+        _persist_api_key(_pending_api_key)
+        _pending_api_key = None
+
     # Main conversation loop with streaming + Esc interrupt
     while True:
         try:
@@ -422,6 +456,26 @@ def launch_chat(provider: str | None = None) -> None:
         if user_input.strip().lower() in ("quit", "exit", "q", "bye"):
             _shutdown(engine)
             break
+
+        # Handle slash commands locally (don't send to Claude)
+        if user_input.strip().startswith("/"):
+            from llm_forge.chat.slash_commands import (
+                CLEAR_SENTINEL,
+                QUIT_SENTINEL,
+                handle_slash_command,
+            )
+
+            result = handle_slash_command(user_input.strip(), engine)
+            if result is not None:
+                if result == QUIT_SENTINEL:
+                    _shutdown(engine)
+                    break
+                if result == CLEAR_SENTINEL:
+                    engine.messages.clear()
+                    _print_info("Conversation cleared. Memory is preserved.")
+                    continue
+                _print_response(result)
+                continue
 
         try:
             _stream_response(engine, user_input)

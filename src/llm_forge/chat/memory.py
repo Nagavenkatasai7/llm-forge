@@ -56,59 +56,57 @@ class MemoryManager:
 
     def _init_db(self) -> None:
         """Create tables if they don't exist."""
-        conn = self._connect()
-        conn.executescript(
-            """
-            CREATE TABLE IF NOT EXISTS user_profile (
-                key TEXT PRIMARY KEY,
-                value TEXT NOT NULL,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            );
+        with self._connect() as conn:
+            conn.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS user_profile (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
 
-            CREATE TABLE IF NOT EXISTS sessions (
-                id TEXT PRIMARY KEY,
-                started_at TIMESTAMP,
-                ended_at TIMESTAMP,
-                summary TEXT,
-                turns INTEGER DEFAULT 0,
-                tokens_used INTEGER DEFAULT 0
-            );
+                CREATE TABLE IF NOT EXISTS sessions (
+                    id TEXT PRIMARY KEY,
+                    started_at TIMESTAMP,
+                    ended_at TIMESTAMP,
+                    summary TEXT,
+                    turns INTEGER DEFAULT 0,
+                    tokens_used INTEGER DEFAULT 0
+                );
 
-            CREATE TABLE IF NOT EXISTS training_runs (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                session_id TEXT,
-                config_path TEXT,
-                model_name TEXT,
-                base_model TEXT,
-                mode TEXT,
-                started_at TIMESTAMP,
-                ended_at TIMESTAMP,
-                final_loss REAL,
-                eval_loss REAL,
-                status TEXT,
-                output_dir TEXT,
-                notes TEXT
-            );
+                CREATE TABLE IF NOT EXISTS training_runs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    session_id TEXT,
+                    config_path TEXT,
+                    model_name TEXT,
+                    base_model TEXT,
+                    mode TEXT,
+                    started_at TIMESTAMP,
+                    ended_at TIMESTAMP,
+                    final_loss REAL,
+                    eval_loss REAL,
+                    status TEXT,
+                    output_dir TEXT,
+                    notes TEXT
+                );
 
-            CREATE TABLE IF NOT EXISTS memories (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                category TEXT NOT NULL,
-                content TEXT NOT NULL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                relevance_score REAL DEFAULT 1.0
-            );
-            """
-        )
-        conn.close()
+                CREATE TABLE IF NOT EXISTS memories (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    category TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    relevance_score REAL DEFAULT 1.0
+                );
+                """
+            )
 
         # Register this session
-        conn = self._connect()
-        conn.execute(
-            "INSERT INTO sessions (id, started_at) VALUES (?, ?)",
-            (self.session_id, self.session_start.isoformat()),
-        )
-        conn.commit()
-        conn.close()
+        with self._connect() as conn:
+            conn.execute(
+                "INSERT INTO sessions (id, started_at) VALUES (?, ?)",
+                (self.session_id, self.session_start.isoformat()),
+            )
+            conn.commit()
 
     def _connect(self) -> sqlite3.Connection:
         return sqlite3.connect(str(self.db_path))
@@ -230,26 +228,23 @@ class MemoryManager:
 
     def save_memory(self, category: str, content: str, relevance: float = 1.0) -> str:
         """Store a memory. Called by Claude proactively."""
-        conn = self._connect()
-        conn.execute(
-            "INSERT INTO memories (category, content, relevance_score) VALUES (?, ?, ?)",
-            (category, content, relevance),
-        )
-        conn.commit()
-        conn.close()
+        with self._connect() as conn:
+            conn.execute(
+                "INSERT INTO memories (category, content, relevance_score) VALUES (?, ?, ?)",
+                (category, content, relevance),
+            )
+            conn.commit()
         return json.dumps({"status": "ok", "message": f"Memory saved: {category}"})
 
     def recall_memory(self, query: str, limit: int = 10) -> str:
         """Search memories by keyword. Returns matching memories."""
-        conn = self._connect()
-        # Simple keyword search across content and category
-        rows = conn.execute(
-            "SELECT category, content, created_at, relevance_score "
-            "FROM memories WHERE content LIKE ? OR category LIKE ? "
-            "ORDER BY relevance_score DESC, created_at DESC LIMIT ?",
-            (f"%{query}%", f"%{query}%", limit),
-        ).fetchall()
-        conn.close()
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT category, content, created_at, relevance_score "
+                "FROM memories WHERE content LIKE ? OR category LIKE ? "
+                "ORDER BY relevance_score DESC, created_at DESC LIMIT ?",
+                (f"%{query}%", f"%{query}%", limit),
+            ).fetchall()
 
         memories = [
             {"category": r[0], "content": r[1], "created_at": r[2], "relevance": r[3]} for r in rows
@@ -258,14 +253,13 @@ class MemoryManager:
 
     def get_session_history(self, limit: int = 5) -> str:
         """Get recent session summaries."""
-        conn = self._connect()
-        rows = conn.execute(
-            "SELECT id, started_at, ended_at, summary, turns "
-            "FROM sessions WHERE summary IS NOT NULL "
-            "ORDER BY started_at DESC LIMIT ?",
-            (limit,),
-        ).fetchall()
-        conn.close()
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT id, started_at, ended_at, summary, turns "
+                "FROM sessions WHERE summary IS NOT NULL "
+                "ORDER BY started_at DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
 
         sessions = [
             {
@@ -292,57 +286,53 @@ class MemoryManager:
         notes: str = "",
     ) -> str:
         """Record a training run."""
-        conn = self._connect()
-        conn.execute(
-            "INSERT INTO training_runs "
-            "(session_id, config_path, model_name, base_model, mode, "
-            "started_at, final_loss, eval_loss, status, output_dir, notes) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (
-                self.session_id,
-                config_path,
-                model_name,
-                base_model,
-                mode,
-                datetime.now().isoformat(),
-                final_loss,
-                eval_loss,
-                status,
-                output_dir,
-                notes,
-            ),
-        )
-        conn.commit()
-        conn.close()
+        with self._connect() as conn:
+            conn.execute(
+                "INSERT INTO training_runs "
+                "(session_id, config_path, model_name, base_model, mode, "
+                "started_at, final_loss, eval_loss, status, output_dir, notes) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    self.session_id,
+                    config_path,
+                    model_name,
+                    base_model,
+                    mode,
+                    datetime.now().isoformat(),
+                    final_loss,
+                    eval_loss,
+                    status,
+                    output_dir,
+                    notes,
+                ),
+            )
+            conn.commit()
         return json.dumps({"status": "ok", "message": "Training run logged"})
 
     def get_user_profile(self) -> dict:
         """Get full user profile."""
-        conn = self._connect()
-        rows = conn.execute("SELECT key, value FROM user_profile").fetchall()
-        conn.close()
+        with self._connect() as conn:
+            rows = conn.execute("SELECT key, value FROM user_profile").fetchall()
         return {r[0]: r[1] for r in rows}
 
     def set_user_profile(self, key: str, value: str) -> None:
         """Set a user profile value."""
-        conn = self._connect()
-        conn.execute(
-            "INSERT OR REPLACE INTO user_profile (key, value, updated_at) VALUES (?, ?, ?)",
-            (key, value, datetime.now().isoformat()),
-        )
-        conn.commit()
-        conn.close()
+        with self._connect() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO user_profile (key, value, updated_at) VALUES (?, ?, ?)",
+                (key, value, datetime.now().isoformat()),
+            )
+            conn.commit()
 
     def get_training_history(self, limit: int = 10) -> list[dict]:
         """Get recent training runs."""
-        conn = self._connect()
-        rows = conn.execute(
-            "SELECT model_name, base_model, mode, started_at, final_loss, "
-            "eval_loss, status, output_dir, notes "
-            "FROM training_runs ORDER BY started_at DESC LIMIT ?",
-            (limit,),
-        ).fetchall()
-        conn.close()
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT model_name, base_model, mode, started_at, final_loss, "
+                "eval_loss, status, output_dir, notes "
+                "FROM training_runs ORDER BY started_at DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
         return [
             {
                 "model_name": r[0],
@@ -404,13 +394,12 @@ class MemoryManager:
             summary = self._summarize_simple(old_messages)
 
         # Store the summary
-        conn = self._connect()
-        conn.execute(
-            "UPDATE sessions SET summary = ? WHERE id = ?",
-            (summary, self.session_id),
-        )
-        conn.commit()
-        conn.close()
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE sessions SET summary = ? WHERE id = ?",
+                (summary, self.session_id),
+            )
+            conn.commit()
 
         # Build compacted message list
         compacted = [
@@ -446,7 +435,9 @@ class MemoryManager:
 
         try:
             response = client.messages.create(
-                model="claude-haiku-4-5",  # Use Haiku for cheap summarization
+                # claude-haiku-4-5 is the correct model ID (released after
+                # training data cutoff; verified against current Anthropic API).
+                model="claude-haiku-4-5",
                 max_tokens=1000,
                 messages=[
                     {
@@ -530,12 +521,15 @@ class MemoryManager:
                 parts.append(f"  - {h['model_name']} ({h['mode']}, {loss_str}, {h['status']})")
 
         # Recent memories
-        conn = self._connect()
-        rows = conn.execute(
-            "SELECT category, content FROM memories "
-            "ORDER BY relevance_score DESC, created_at DESC LIMIT 10"
-        ).fetchall()
-        conn.close()
+        rows = []
+        try:
+            with self._connect() as conn:
+                rows = conn.execute(
+                    "SELECT category, content FROM memories "
+                    "ORDER BY relevance_score DESC, created_at DESC LIMIT 10"
+                ).fetchall()
+        except Exception:
+            pass
 
         if rows:
             parts.append("\n## Key Memories")
@@ -543,13 +537,16 @@ class MemoryManager:
                 parts.append(f"- [{category}] {content}")
 
         # Last session summary
-        conn = self._connect()
-        last_session = conn.execute(
-            "SELECT summary FROM sessions WHERE summary IS NOT NULL AND id != ? "
-            "ORDER BY started_at DESC LIMIT 1",
-            (self.session_id,),
-        ).fetchone()
-        conn.close()
+        last_session = None
+        try:
+            with self._connect() as conn:
+                last_session = conn.execute(
+                    "SELECT summary FROM sessions WHERE summary IS NOT NULL AND id != ? "
+                    "ORDER BY started_at DESC LIMIT 1",
+                    (self.session_id,),
+                ).fetchone()
+        except Exception:
+            pass
 
         if last_session and last_session[0]:
             parts.append(f"\n## Last Session Summary\n{last_session[0]}")
@@ -572,16 +569,15 @@ class MemoryManager:
             summary = self._summarize_simple(messages)
 
         # Update session record
-        conn = self._connect()
-        conn.execute(
-            "UPDATE sessions SET ended_at = ?, summary = ?, turns = ?, tokens_used = ? WHERE id = ?",
-            (
-                datetime.now().isoformat(),
-                summary,
-                turns,
-                self.estimate_tokens(messages),
-                self.session_id,
-            ),
-        )
-        conn.commit()
-        conn.close()
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE sessions SET ended_at = ?, summary = ?, turns = ?, tokens_used = ? WHERE id = ?",
+                (
+                    datetime.now().isoformat(),
+                    summary,
+                    turns,
+                    self.estimate_tokens(messages),
+                    self.session_id,
+                ),
+            )
+            conn.commit()

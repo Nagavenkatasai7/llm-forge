@@ -8,6 +8,7 @@ import platform
 import re
 import subprocess
 import sys
+import threading
 from pathlib import Path
 
 from llm_forge.chat.execution import (
@@ -19,6 +20,7 @@ from llm_forge.chat.training_monitor import TrainingMonitor
 
 # ---------------------------------------------------------------------------
 # Active training monitor (module-level singleton)
+# TODO: Move to ChatEngine instance for multi-session safety
 # ---------------------------------------------------------------------------
 _active_monitor: TrainingMonitor | None = None
 
@@ -834,7 +836,7 @@ def _start_training(config_path: str, verbose: bool = True) -> str:
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
-            cwd=str(p.parent),
+            cwd=str(Path.cwd()),
         )
 
         # Read first few lines to confirm it started
@@ -844,6 +846,18 @@ def _start_training(config_path: str, verbose: bool = True) -> str:
             if not line:
                 break
             output_lines.append(line.rstrip())
+
+        # Drain remaining stdout in a background thread to prevent
+        # pipe buffer from filling up and deadlocking the subprocess.
+        def _drain_stdout(pipe):
+            try:
+                while pipe.readline():
+                    pass
+            except (OSError, ValueError):
+                pass
+
+        drain_thread = threading.Thread(target=_drain_stdout, args=(process.stdout,), daemon=True)
+        drain_thread.start()
 
         # Start a background monitor for real-time progress
         output_dir = _resolve_output_dir(p)

@@ -46,6 +46,8 @@ def _call_anthropic(messages: list[dict], system: str, client=None) -> dict:
         client = _get_anthropic_client()
 
     response = client.messages.create(
+        # claude-sonnet-4-5 is the correct model ID (released after training
+        # data cutoff; verified against current Anthropic API).
         model="claude-sonnet-4-5",
         max_tokens=4096,
         system=system,
@@ -66,8 +68,10 @@ def _stream_anthropic(
     if client is None:
         client = _get_anthropic_client()
 
+    collected_text: list[str] = []
+
     with client.messages.stream(
-        model="claude-sonnet-4-5",
+        model="claude-sonnet-4-5",  # Correct model ID (released after training cutoff)
         max_tokens=4096,
         system=system,
         tools=TOOLS,
@@ -79,10 +83,24 @@ def _stream_anthropic(
                 break
 
             if event.type == "content_block_delta":
-                if event.delta.type == "text_delta" and on_text:
-                    on_text(event.delta.text)
+                if event.delta.type == "text_delta":
+                    collected_text.append(event.delta.text)
+                    if on_text:
+                        on_text(event.delta.text)
 
-        return stream.get_final_message()
+        try:
+            return stream.get_final_message()
+        except Exception:
+            # Stream was interrupted or incomplete — construct a minimal
+            # response object with the text collected so far.
+            from types import SimpleNamespace
+
+            text = "".join(collected_text) or "[incomplete response]"
+            block = SimpleNamespace(type="text", text=text)
+            return SimpleNamespace(
+                content=[block],
+                stop_reason="end_turn",
+            )
 
 
 def _call_openai(messages: list[dict], system: str) -> dict:
@@ -198,6 +216,9 @@ class ChatEngine:
         if self.memory.needs_compaction(self.messages):
             self.messages = self.memory.compact_messages(self.messages, client=self._get_client())
 
+        max_tool_iterations = 15
+        tool_iteration = 0
+
         while True:
             if self.provider == "anthropic":
                 if on_text and not interrupt_check:
@@ -242,6 +263,20 @@ class ChatEngine:
             if not tool_calls:
                 self.messages.append({"role": "assistant", "content": text})
                 return text
+
+            # Guard against unbounded tool-call loops
+            tool_iteration += 1
+            if tool_iteration >= max_tool_iterations:
+                partial = text or ""
+                if partial:
+                    partial += "\n\n"
+                partial += (
+                    "[Tool-call limit reached: the assistant used tools "
+                    f"{max_tool_iterations} times in a row. Returning partial "
+                    "response to avoid an infinite loop.]"
+                )
+                self.messages.append({"role": "assistant", "content": partial})
+                return partial
 
             if self.provider == "anthropic":
                 self._handle_anthropic_tools(response, tool_calls)
