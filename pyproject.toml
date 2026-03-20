@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "llm-forge-new"
-version = "2.0.0"
+version = "2.0.1"
 description = "Config-driven, YAML-first open-source LLM training platform"
 readme = "README.md"
 license = "Apache-2.0"
@@ -39,7 +39,6 @@ dependencies = [
     "safetensors>=0.4",
     "bitsandbytes>=0.44",
     "openai>=1.50",
-    "textual>=1.0",
     "scipy",
     "numpy",
 ]

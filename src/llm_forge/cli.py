@@ -222,15 +222,9 @@ def main(
 ) -> None:
     """Build your own AI model. Just type llm-forge and start talking."""
     if ctx.invoked_subcommand is None:
-        # Try Textual TUI first (the good experience), fall back to print-based
-        try:
-            from llm_forge.chat.tui import launch_tui
+        from llm_forge.chat.ui import launch_chat
 
-            launch_tui(provider=provider)
-        except ImportError:
-            from llm_forge.chat.ui import launch_chat
-
-            launch_chat(provider=provider)
+        launch_chat(provider=provider)
 
 
 # ---------------------------------------------------------------------------
