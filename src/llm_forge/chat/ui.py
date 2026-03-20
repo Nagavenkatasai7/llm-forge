@@ -215,9 +215,9 @@ def _print_tool_action(
     else:
         label = _format_tool_detail(tool_name, input_data)
     if console is not None:
-        console.print(f"  [dim cyan]| {label}[/dim cyan]")
+        console.print(f"  [dim]{label}[/dim]")
     else:
-        print(f"  | {label}")
+        print(f"  {label}")
 
 
 def _print_tool_result_summary(tool_name: str, result_json: str) -> None:
@@ -227,9 +227,9 @@ def _print_tool_result_summary(tool_name: str, result_json: str) -> None:
         return
     console = _get_console()
     if console is not None:
-        console.print(f"  [dim]|   {summary}[/dim]")
+        console.print(f"    [dim]{summary}[/dim]")
     else:
-        print(f"  |   {summary}")
+        print(f"    {summary}")
 
 
 # ---------------------------------------------------------------------------
@@ -354,45 +354,24 @@ def _print_setup_plan(plan: dict[str, Any]) -> None:
 
 
 def _print_banner(model_label: str = "") -> None:
-    """Print the welcome banner with version, quick-help hints, and model info."""
+    """Print a minimal welcome — like Claude Code, no heavy boxes."""
     console = _get_console()
+    version = _get_version()
+
     if console is not None:
-        try:
-            from rich.panel import Panel
-            from rich.text import Text
-
-            version = _get_version()
-
-            banner = Text()
-            banner.append("LLM Forge", style="bold cyan")
-            banner.append(f" v{version}\n", style="dim")
-            banner.append("Build your own AI model. Just tell me what you want.\n\n", style="")
-            banner.append("/", style="bold yellow")
-            banner.append(" commands", style="dim")
-            banner.append("  |  ", style="dim")
-            banner.append("Esc", style="bold yellow")
-            banner.append(" interrupt", style="dim")
-            banner.append("  |  ", style="dim")
-            banner.append("quit", style="bold red")
-            banner.append(" exit", style="dim")
-            if model_label:
-                banner.append(f"\n{model_label}", style="dim")
-
-            console.print(Panel(banner, border_style="cyan", padding=(1, 2)))
-            console.print()
-            return
-        except ImportError:
-            pass
-
-    # Plain-text fallback
-    print("=" * 56)
-    print("  LLM Forge - Build your own AI model")
-    print("  Just tell me what you want to build.")
-    print("  Type '/' for commands, Esc to interrupt, 'quit' to exit.")
-    if model_label:
-        print(f"  {model_label}")
-    print("=" * 56)
-    print()
+        console.print()
+        console.print(f"[bold cyan]LLM Forge[/bold cyan] [dim]v{version}[/dim]")
+        if model_label:
+            console.print(f"[dim]{model_label}[/dim]")
+        console.print("[dim]Type / for commands, Esc to interrupt, quit to exit[/dim]")
+        console.print()
+    else:
+        print()
+        print(f"LLM Forge v{version}")
+        if model_label:
+            print(model_label)
+        print("Type / for commands, Esc to interrupt, quit to exit")
+        print()
 
 
 # ---------------------------------------------------------------------------
@@ -401,28 +380,20 @@ def _print_banner(model_label: str = "") -> None:
 
 
 def _print_response(text: str) -> None:
-    """Print assistant response with a labeled header and indented markdown.
-
-    Uses a simple 'Forge:' header followed by left-padded Markdown, giving
-    a clean, readable appearance without heavy separators.
-    """
+    """Print assistant response — clean, no decoration, just markdown."""
     console = _get_console()
     if console is not None:
         try:
             from rich.markdown import Markdown
-            from rich.padding import Padding
 
             console.print()
-            console.print("[bold green]Forge:[/bold green]")
-            md = Markdown(text)
-            console.print(Padding(md, (0, 0, 0, 2)))
+            console.print(Markdown(text))
             console.print()
             return
         except ImportError:
             pass
 
-    # Plain-text fallback
-    print(f"\nForge:\n  {text}\n")
+    print(f"\n{text}\n")
 
 
 # ---------------------------------------------------------------------------
@@ -459,48 +430,22 @@ def _check_esc_pressed() -> bool:
 
 
 def _stream_response(engine: ChatEngine, user_input: str) -> None:
-    """Stream the assistant response with Claude Code-style action indicators.
-
-    Shows a "thinking..." indicator before the first token, displays
-    detailed tool actions as they execute, and streams the final text
-    response with a clean 'Forge:' header and consistent indentation.
-    """
+    """Stream the response — clean, natural, like Claude Code."""
     console = _get_console()
     interrupted = False
     text_chunks: list[str] = []
     first_token_received = False
-    thinking_shown = False
-
-    def _show_thinking() -> None:
-        nonlocal thinking_shown
-        if thinking_shown:
-            return
-        thinking_shown = True
-        if console is not None:
-            console.print()
-            console.print("  [dim italic]thinking...[/dim italic]")
-        else:
-            print()
-            print("  thinking...")
-
-    def _print_forge_header() -> None:
-        """Print the Forge: header when the first text token arrives."""
-        if console is not None:
-            console.print()
-            console.print("[bold green]Forge:[/bold green]")
-            console.print("  ", end="")
-        else:
-            print()
-            print("Forge:")
-            print("  ", end="")
 
     def on_text(chunk: str) -> None:
-        """Called for each streamed text chunk."""
         nonlocal first_token_received
         text_chunks.append(chunk)
         if not first_token_received:
             first_token_received = True
-            _print_forge_header()
+            # Just a blank line before the response starts
+            if console is not None:
+                console.print()
+            else:
+                print()
         if console is not None:
             console.print(chunk, end="", highlight=False, soft_wrap=True)
         else:
@@ -515,12 +460,11 @@ def _stream_response(engine: ChatEngine, user_input: str) -> None:
             return True
         return False
 
-    # -- Wire tool-action display into the engine for this request --
+    # Wire tool-action display
     prev_start = engine.on_tool_start
     prev_end = engine.on_tool_end
 
     def _on_tool_start(name: str, input_data: dict) -> None:
-        _show_thinking()
         _print_tool_action(name, input_data=input_data)
 
     def _on_tool_end(name: str, _input_data: dict, result: str) -> None:
@@ -528,9 +472,6 @@ def _stream_response(engine: ChatEngine, user_input: str) -> None:
 
     engine.on_tool_start = _on_tool_start
     engine.on_tool_end = _on_tool_end
-
-    # Show thinking before we start (covers the initial API latency)
-    _show_thinking()
 
     try:
         engine.send(user_input, on_text=on_text, interrupt_check=interrupt_check)

@@ -80,7 +80,7 @@ def get_user_input(session=None, prompt_text: str = "You: ") -> str:
         try:
             from prompt_toolkit.formatted_text import HTML
 
-            text = session.prompt(HTML("<cyan><b>You: </b></cyan>"))
+            text = session.prompt(HTML("<cyan><b>&gt; </b></cyan>"))
             return text
         except (EOFError, KeyboardInterrupt):
             raise
@@ -91,7 +91,7 @@ def get_user_input(session=None, prompt_text: str = "You: ") -> str:
     try:
         from rich.console import Console
 
-        Console().print("[bold cyan]You:[/bold cyan] ", end="")
+        Console().print("[bold cyan]>[/bold cyan] ", end="")
         return input()
     except ImportError:
-        return input(prompt_text)
+        return input("> ")
