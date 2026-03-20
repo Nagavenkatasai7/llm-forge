@@ -694,6 +694,10 @@ def launch_chat(provider: str | None = None) -> None:
     # Now continue with normal engine initialization
     engine = ChatEngine(provider=provider, project_dir=".")
 
+    # If provider is nvidia (default free tier), announce it
+    if engine.provider == "nvidia":
+        _print_info("Using NVIDIA NIM (free) -- 189 models available. Type /model to switch.")
+
     # If no API key, try to load saved key or ask the user
     _pending_api_key: str | None = None
     if engine.provider == "none":

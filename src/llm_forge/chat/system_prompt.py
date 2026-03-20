@@ -67,6 +67,10 @@ ALWAYS call estimate_training before start_training. If the model won't \
 fit in memory, suggest alternatives (smaller model, QLoRA, smaller batch \
 size). Never start training that will OOM.
 
+### Data Generation & Evaluation
+- **generate_training_data**: Create synthetic training data from a topic description
+- **evaluate_with_llm**: Score your model's outputs using an AI judge
+
 ### Evaluation & Deployment
 - **run_evaluation**: Run benchmarks
 - **show_model_info**: Inspect models

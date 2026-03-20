@@ -254,3 +254,380 @@ class TestExecuteToolDispatcher:
         # scan_data requires a "path" key; omitting it should trigger KeyError
         result = json.loads(execute_tool("scan_data", {}))
         assert "error" in result
+
+
+# ===================================================================
+# NVIDIA-powered tools: generate_training_data
+# ===================================================================
+
+
+class TestGenerateTrainingData:
+    """Test _generate_training_data() via execute_tool (mocked NVIDIA API)."""
+
+    def _make_mock_response(self, content: str):
+        """Build a mock OpenAI ChatCompletion-like response."""
+        from types import SimpleNamespace
+
+        choice = SimpleNamespace()
+        choice.message = SimpleNamespace()
+        choice.message.content = content
+        resp = SimpleNamespace()
+        resp.choices = [choice]
+        return resp
+
+    def test_generate_training_data_basic(self, tmp_path: Path) -> None:
+        """Generates samples and writes JSONL to the output path."""
+        from unittest.mock import MagicMock, patch
+
+        fake_lines = "\n".join(
+            [
+                json.dumps({"instruction": f"Q{i}?", "input": "", "output": f"A{i}."})
+                for i in range(3)
+            ]
+        )
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.return_value = self._make_mock_response(fake_lines)
+
+        with patch("openai.OpenAI", return_value=mock_client):
+            output_path = str(tmp_path / "synthetic.jsonl")
+            result = json.loads(
+                execute_tool(
+                    "generate_training_data",
+                    {
+                        "topic": "Python programming",
+                        "num_samples": 3,
+                        "output_path": output_path,
+                    },
+                )
+            )
+
+        assert result["status"] == "ok"
+        assert result["samples_generated"] == 3
+        assert result["topic"] == "Python programming"
+        assert Path(output_path).exists()
+
+        # Verify the JSONL content
+        with open(output_path) as f:
+            lines = [json.loads(line) for line in f if line.strip()]
+        assert len(lines) == 3
+        assert lines[0]["instruction"] == "Q0?"
+
+    def test_generate_training_data_with_examples(self, tmp_path: Path) -> None:
+        """Examples text is included in the prompt sent to the model."""
+        from unittest.mock import MagicMock, patch
+
+        fake_line = json.dumps({"instruction": "Q?", "input": "", "output": "A."})
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.return_value = self._make_mock_response(fake_line)
+
+        with patch("openai.OpenAI", return_value=mock_client):
+            result = json.loads(
+                execute_tool(
+                    "generate_training_data",
+                    {
+                        "topic": "cooking",
+                        "num_samples": 1,
+                        "examples": ["Q: What is sauteing? A: Pan-cooking with oil."],
+                        "output_path": str(tmp_path / "out.jsonl"),
+                    },
+                )
+            )
+
+        assert result["status"] == "ok"
+        # Verify examples were passed in the prompt
+        call_args = mock_client.chat.completions.create.call_args
+        prompt_text = call_args.kwargs["messages"][0]["content"]
+        assert "sauteing" in prompt_text
+
+    def test_generate_training_data_creates_parent_dirs(self, tmp_path: Path) -> None:
+        """Output path with nested directories is created automatically."""
+        from unittest.mock import MagicMock, patch
+
+        fake_line = json.dumps({"instruction": "Q?", "input": "", "output": "A."})
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.return_value = self._make_mock_response(fake_line)
+
+        output_path = str(tmp_path / "deep" / "nested" / "dir" / "data.jsonl")
+        with patch("openai.OpenAI", return_value=mock_client):
+            result = json.loads(
+                execute_tool(
+                    "generate_training_data",
+                    {"topic": "math", "num_samples": 1, "output_path": output_path},
+                )
+            )
+
+        assert result["status"] == "ok"
+        assert Path(output_path).exists()
+
+    def test_generate_training_data_api_error(self, tmp_path: Path) -> None:
+        """Returns error status when the NVIDIA API call fails."""
+        from unittest.mock import MagicMock, patch
+
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.side_effect = RuntimeError("API timeout")
+
+        with patch("openai.OpenAI", return_value=mock_client):
+            result = json.loads(
+                execute_tool(
+                    "generate_training_data",
+                    {
+                        "topic": "finance",
+                        "num_samples": 5,
+                        "output_path": str(tmp_path / "out.jsonl"),
+                    },
+                )
+            )
+
+        assert result["status"] == "error"
+        assert "API timeout" in result["error"]
+        assert result["generated_so_far"] == 0
+
+    def test_generate_training_data_skips_malformed_json(self, tmp_path: Path) -> None:
+        """Malformed JSON lines in the model response are silently skipped."""
+        from unittest.mock import MagicMock, patch
+
+        content = (
+            '{"instruction": "Good Q?", "input": "", "output": "Good A."}\n'
+            "this is not json\n"
+            '{"instruction": "Also good?", "output": "Yes."}\n'
+        )
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.return_value = self._make_mock_response(content)
+
+        with patch("openai.OpenAI", return_value=mock_client):
+            result = json.loads(
+                execute_tool(
+                    "generate_training_data",
+                    {
+                        "topic": "science",
+                        "num_samples": 3,
+                        "output_path": str(tmp_path / "out.jsonl"),
+                    },
+                )
+            )
+
+        assert result["status"] == "ok"
+        # Only 2 valid JSON lines out of 3
+        assert result["samples_generated"] == 2
+
+    def test_generate_training_data_default_output_path(self) -> None:
+        """When no output_path is given, defaults to data/synthetic_train.jsonl."""
+        from unittest.mock import MagicMock, patch
+
+        fake_line = json.dumps({"instruction": "Q?", "input": "", "output": "A."})
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.return_value = self._make_mock_response(fake_line)
+
+        with patch("openai.OpenAI", return_value=mock_client):
+            result = json.loads(
+                execute_tool(
+                    "generate_training_data",
+                    {"topic": "history", "num_samples": 1},
+                )
+            )
+
+        assert result["status"] == "ok"
+        assert result["output_path"] == "data/synthetic_train.jsonl"
+        # Clean up
+        Path("data/synthetic_train.jsonl").unlink(missing_ok=True)
+
+
+# ===================================================================
+# NVIDIA-powered tools: evaluate_with_llm
+# ===================================================================
+
+
+class TestEvaluateWithLlm:
+    """Test _evaluate_with_llm() via execute_tool (mocked NVIDIA API)."""
+
+    def _make_mock_response(self, content: str):
+        """Build a mock OpenAI ChatCompletion-like response."""
+        from types import SimpleNamespace
+
+        choice = SimpleNamespace()
+        choice.message = SimpleNamespace()
+        choice.message.content = content
+        resp = SimpleNamespace()
+        resp.choices = [choice]
+        return resp
+
+    def test_evaluate_with_llm_basic(self) -> None:
+        """Evaluates a single Q&A pair and returns scores."""
+        from unittest.mock import MagicMock, patch
+
+        judge_response = json.dumps(
+            {
+                "scores": {"relevance": 4, "accuracy": 5, "helpfulness": 4},
+                "overall": 4.3,
+                "feedback": "Good response.",
+            }
+        )
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.return_value = self._make_mock_response(judge_response)
+
+        with patch("openai.OpenAI", return_value=mock_client):
+            result = json.loads(
+                execute_tool(
+                    "evaluate_with_llm",
+                    {
+                        "questions": ["What is Python?"],
+                        "model_outputs": ["Python is a programming language."],
+                    },
+                )
+            )
+
+        assert result["status"] == "ok"
+        assert result["samples_evaluated"] == 1
+        assert result["average_score"] == 4.3
+        assert len(result["evaluations"]) == 1
+        assert result["evaluations"][0]["overall"] == 4.3
+
+    def test_evaluate_with_llm_multiple(self) -> None:
+        """Evaluates multiple Q&A pairs and averages scores."""
+        from unittest.mock import MagicMock, patch
+
+        responses = [
+            json.dumps(
+                {
+                    "scores": {"relevance": 5, "accuracy": 5, "helpfulness": 5},
+                    "overall": 5.0,
+                    "feedback": "Excellent.",
+                }
+            ),
+            json.dumps(
+                {
+                    "scores": {"relevance": 3, "accuracy": 3, "helpfulness": 3},
+                    "overall": 3.0,
+                    "feedback": "Average.",
+                }
+            ),
+        ]
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.side_effect = [
+            self._make_mock_response(r) for r in responses
+        ]
+
+        with patch("openai.OpenAI", return_value=mock_client):
+            result = json.loads(
+                execute_tool(
+                    "evaluate_with_llm",
+                    {
+                        "questions": ["Q1?", "Q2?"],
+                        "model_outputs": ["A1.", "A2."],
+                    },
+                )
+            )
+
+        assert result["status"] == "ok"
+        assert result["samples_evaluated"] == 2
+        assert result["average_score"] == 4.0  # (5.0 + 3.0) / 2
+
+    def test_evaluate_with_llm_custom_criteria(self) -> None:
+        """Custom criteria string is passed to the judge prompt."""
+        from unittest.mock import MagicMock, patch
+
+        judge_response = json.dumps(
+            {
+                "scores": {"clarity": 4, "depth": 3},
+                "overall": 3.5,
+                "feedback": "Decent.",
+            }
+        )
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.return_value = self._make_mock_response(judge_response)
+
+        with patch("openai.OpenAI", return_value=mock_client):
+            result = json.loads(
+                execute_tool(
+                    "evaluate_with_llm",
+                    {
+                        "questions": ["Explain AI"],
+                        "model_outputs": ["AI is intelligence."],
+                        "criteria": "clarity, depth",
+                    },
+                )
+            )
+
+        assert result["status"] == "ok"
+        assert result["criteria"] == "clarity, depth"
+        # Verify criteria was passed in the prompt
+        call_args = mock_client.chat.completions.create.call_args
+        prompt_text = call_args.kwargs["messages"][0]["content"]
+        assert "clarity, depth" in prompt_text
+
+    def test_evaluate_with_llm_api_error(self) -> None:
+        """API error for one question produces error entry but does not crash."""
+        from unittest.mock import MagicMock, patch
+
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.side_effect = RuntimeError("Rate limited")
+
+        with patch("openai.OpenAI", return_value=mock_client):
+            result = json.loads(
+                execute_tool(
+                    "evaluate_with_llm",
+                    {
+                        "questions": ["What is ML?"],
+                        "model_outputs": ["ML is machine learning."],
+                    },
+                )
+            )
+
+        assert result["status"] == "ok"
+        assert result["samples_evaluated"] == 1
+        assert result["average_score"] == 0  # No valid scores
+        assert "error" in result["evaluations"][0]
+        assert "Rate limited" in result["evaluations"][0]["error"]
+
+    def test_evaluate_with_llm_unparseable_response(self) -> None:
+        """When judge returns non-JSON, an error entry is recorded."""
+        from unittest.mock import MagicMock, patch
+
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.return_value = self._make_mock_response(
+            "I cannot evaluate this in JSON format."
+        )
+
+        with patch("openai.OpenAI", return_value=mock_client):
+            result = json.loads(
+                execute_tool(
+                    "evaluate_with_llm",
+                    {
+                        "questions": ["Test?"],
+                        "model_outputs": ["Answer."],
+                    },
+                )
+            )
+
+        assert result["status"] == "ok"
+        assert result["samples_evaluated"] == 1
+        assert "error" in result["evaluations"][0]
+
+    def test_evaluate_with_llm_question_truncation(self) -> None:
+        """Long questions are truncated to 100 chars in the evaluation result."""
+        from unittest.mock import MagicMock, patch
+
+        long_question = "Q" * 200
+        judge_response = json.dumps(
+            {
+                "scores": {"relevance": 4, "accuracy": 4, "helpfulness": 4},
+                "overall": 4.0,
+                "feedback": "Good.",
+            }
+        )
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.return_value = self._make_mock_response(judge_response)
+
+        with patch("openai.OpenAI", return_value=mock_client):
+            result = json.loads(
+                execute_tool(
+                    "evaluate_with_llm",
+                    {
+                        "questions": [long_question],
+                        "model_outputs": ["Short answer."],
+                    },
+                )
+            )
+
+        assert result["status"] == "ok"
+        assert len(result["evaluations"][0]["question"]) == 100

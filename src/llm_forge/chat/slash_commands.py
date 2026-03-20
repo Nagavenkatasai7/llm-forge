@@ -261,9 +261,47 @@ def _cmd_version(engine: ChatEngine, args: str) -> str:
 
 def _cmd_model(engine: ChatEngine, args: str) -> str:
     """Show current model or switch to a different one."""
-    from llm_forge.chat.engine import CLAUDE_MODELS
-
     args = args.strip().lower()
+
+    # NVIDIA provider — show NVIDIA models
+    if engine.provider == "nvidia":
+        from llm_forge.chat.nvidia_provider import NVIDIA_MODELS
+
+        if not args:
+            current = NVIDIA_MODELS.get(engine.model_key, {})
+            lines = [
+                f"Current model: {current.get('name', engine.model_key)}",
+                f"  ID: {current.get('id', '?')}",
+                f"  Params: {current.get('params', '?')}",
+                "  Provider: NVIDIA NIM (free)",
+                "",
+                "Available models:",
+            ]
+            # Group by category
+            categories: dict[str, list] = {}
+            for key, info in NVIDIA_MODELS.items():
+                cat = info["category"]
+                if cat not in categories:
+                    categories[cat] = []
+                categories[cat].append((key, info))
+
+            for cat, models in categories.items():
+                lines.append(f"\n  [{cat.upper()}]")
+                for key, info in models:
+                    marker = " <-- active" if key == engine.model_key else ""
+                    lines.append(f"    {key:<22} {info['name']:<22} {info['params']}{marker}")
+            lines.append("")
+            lines.append("Switch with: /model <key>  (e.g. /model llama-3.1-8b)")
+            return "\n".join(lines)
+
+        if args in NVIDIA_MODELS:
+            engine.model_key = args
+            info = NVIDIA_MODELS[args]
+            return f"Switched to {info['name']} ({info['params']})"
+        return f"Unknown model: {args}\nAvailable: {', '.join(NVIDIA_MODELS.keys())}"
+
+    # Anthropic / default — show Claude models
+    from llm_forge.chat.engine import CLAUDE_MODELS
 
     # No argument — show current model and available options
     if not args:
@@ -341,7 +379,7 @@ COMMANDS: dict[str, dict] = {
     "/quit": {"description": "Exit the chat session", "handler": _cmd_quit},
     "/version": {"description": "Show llm-forge version", "handler": _cmd_version},
     "/model": {
-        "description": "Show or switch Claude model (e.g. /model opus-4.6)",
+        "description": "Show or switch model (e.g. /model opus-4.6 or /model llama-3.1-8b)",
         "handler": _cmd_model,
     },
     "/paste": {

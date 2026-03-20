@@ -30,7 +30,10 @@ def _get_provider() -> str:
         return "anthropic"
     if os.environ.get("OPENAI_API_KEY"):
         return "openai"
-    return "none"
+    if os.environ.get("NVIDIA_API_KEY"):
+        return "nvidia"
+    # Default: use embedded NVIDIA key (free for everyone)
+    return "nvidia"
 
 
 def _get_anthropic_client():
@@ -215,6 +218,13 @@ class ChatEngine:
         self.permissions = PermissionSystem(auto_approve=True)
         self._client = None
 
+        # When provider is nvidia, ensure model_key is a valid NVIDIA model
+        if self.provider == "nvidia":
+            from llm_forge.chat.nvidia_provider import DEFAULT_NVIDIA_MODEL, NVIDIA_MODELS
+
+            if self.model_key not in NVIDIA_MODELS:
+                self.model_key = DEFAULT_NVIDIA_MODEL
+
         # Track recent tool names for context detection (model output vs instruction)
         self._recent_tool_names: list[str] = []
 
@@ -316,6 +326,28 @@ class ChatEngine:
             elif self.provider == "openai":
                 response = _call_openai(self.messages, self.system)
                 text, tool_calls = self._parse_openai_response(response)
+            elif self.provider == "nvidia":
+                from llm_forge.chat.nvidia_provider import call_nvidia, stream_nvidia
+
+                if on_text:
+                    response = stream_nvidia(
+                        self.messages,
+                        self.system,
+                        model_key=self.model_key,
+                        on_text=on_text,
+                        interrupt_check=interrupt_check,
+                    )
+                else:
+                    response = call_nvidia(
+                        self.messages,
+                        self.system,
+                        model_key=self.model_key,
+                    )
+                # Parse response (OpenAI format)
+                text = response.choices[0].message.content or ""
+                # NVIDIA models don't support Claude-style tool use;
+                # the manager works through natural language instructions instead.
+                tool_calls = []
             else:
                 return (
                     "No API key found. Set ANTHROPIC_API_KEY or OPENAI_API_KEY.\n\n"

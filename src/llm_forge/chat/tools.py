@@ -469,6 +469,66 @@ TOOLS = [
             "required": ["config_path", "model_name", "base_model", "mode", "output_dir"],
         },
     },
+    # ----- NVIDIA-powered tools (synthetic data & LLM-as-Judge) -----
+    {
+        "name": "generate_training_data",
+        "description": "Generate synthetic training data using a large AI model. Give it a topic, a few examples, and it creates hundreds of high-quality Q&A pairs for fine-tuning.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "topic": {
+                    "type": "string",
+                    "description": "Topic for data generation (e.g., 'New Zealand visa regulations')",
+                },
+                "num_samples": {
+                    "type": "integer",
+                    "description": "Number of Q&A pairs to generate (default: 50)",
+                    "default": 50,
+                },
+                "examples": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Optional: 3-5 example Q&A pairs to guide the style",
+                },
+                "output_path": {
+                    "type": "string",
+                    "description": "Where to save the generated data (default: data/synthetic_train.jsonl)",
+                },
+                "format": {
+                    "type": "string",
+                    "enum": ["alpaca", "sharegpt"],
+                    "description": "Output format",
+                    "default": "alpaca",
+                },
+            },
+            "required": ["topic"],
+        },
+    },
+    {
+        "name": "evaluate_with_llm",
+        "description": "Evaluate your trained model's outputs using a large AI judge model. Scores responses on relevance, accuracy, helpfulness, and coherence.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "model_outputs": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "List of model outputs to evaluate",
+                },
+                "questions": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "The questions that produced these outputs",
+                },
+                "criteria": {
+                    "type": "string",
+                    "description": "What to evaluate (default: relevance, accuracy, helpfulness)",
+                    "default": "relevance, accuracy, helpfulness",
+                },
+            },
+            "required": ["model_outputs", "questions"],
+        },
+    },
     # ----- Execution tools (system-level, permission-gated) -----
     *EXECUTION_TOOLS,
 ]
@@ -553,6 +613,20 @@ def execute_tool(name: str, input_data: dict) -> str:
                 directory=input_data["directory"],
                 mode=input_data.get("mode", "auto"),
                 include_examples=input_data.get("include_examples", True),
+            )
+        elif name == "generate_training_data":
+            return _generate_training_data(
+                topic=input_data["topic"],
+                num_samples=input_data.get("num_samples", 50),
+                examples=input_data.get("examples"),
+                output_path=input_data.get("output_path"),
+                fmt=input_data.get("format", "alpaca"),
+            )
+        elif name == "evaluate_with_llm":
+            return _evaluate_with_llm(
+                model_outputs=input_data["model_outputs"],
+                questions=input_data["questions"],
+                criteria=input_data.get("criteria", "relevance, accuracy, helpfulness"),
             )
         elif name in EXECUTION_TOOL_NAMES:
             return execute_execution_tool(name, input_data)
@@ -1699,3 +1773,165 @@ def _setup_project(
         include_examples=include_examples,
     )
     return json.dumps(result, indent=2)
+
+
+# ---------------------------------------------------------------------------
+# NVIDIA-powered tools (synthetic data generation & LLM-as-Judge evaluation)
+# ---------------------------------------------------------------------------
+
+
+def _generate_training_data(
+    topic: str,
+    num_samples: int = 50,
+    examples: list[str] | None = None,
+    output_path: str | None = None,
+    fmt: str = "alpaca",
+) -> str:
+    """Generate synthetic training data using NVIDIA NIM models."""
+    from openai import OpenAI
+
+    from llm_forge.chat.nvidia_provider import NVIDIA_BASE_URL, get_nvidia_api_key
+
+    client = OpenAI(base_url=NVIDIA_BASE_URL, api_key=get_nvidia_api_key())
+
+    output_path = output_path or "data/synthetic_train.jsonl"
+
+    # Build the generation prompt
+    example_text = ""
+    if examples:
+        example_text = "\n\nHere are example Q&A pairs to match the style:\n"
+        for i, ex in enumerate(examples, 1):
+            example_text += f"{i}. {ex}\n"
+
+    generated: list[dict] = []
+    batch_size = 10  # Generate 10 at a time
+
+    for batch_num in range(0, num_samples, batch_size):
+        remaining = min(batch_size, num_samples - batch_num)
+
+        prompt = (
+            f"Generate exactly {remaining} diverse question-answer pairs about: {topic}"
+            f"{example_text}\n"
+            "Format each pair as a JSON object on its own line, like:\n"
+            '{"instruction": "question here", "input": "", "output": "detailed answer here"}\n'
+            "\nRules:\n"
+            "- Each answer should be 2-5 sentences\n"
+            "- Questions should be diverse (what, how, why, when, compare, explain)\n"
+            "- Answers must be factually accurate\n"
+            "- No duplicate questions\n"
+            f"\nGenerate {remaining} pairs now, one JSON object per line:"
+        )
+
+        try:
+            response = client.chat.completions.create(
+                model="meta/llama-3.3-70b-instruct",
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=4096,
+                temperature=0.8,
+            )
+
+            text = response.choices[0].message.content or ""
+
+            # Parse JSON lines from response
+            for line in text.strip().split("\n"):
+                line = line.strip()
+                if line.startswith("{") and line.endswith("}"):
+                    try:
+                        obj = json.loads(line)
+                        if "instruction" in obj and "output" in obj:
+                            if "input" not in obj:
+                                obj["input"] = ""
+                            generated.append(obj)
+                    except json.JSONDecodeError:
+                        continue
+        except Exception as e:
+            return json.dumps(
+                {
+                    "status": "error",
+                    "error": str(e),
+                    "generated_so_far": len(generated),
+                }
+            )
+
+    # Save to file
+    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+    with open(output_path, "w") as f:
+        for item in generated:
+            f.write(json.dumps(item) + "\n")
+
+    return json.dumps(
+        {
+            "status": "ok",
+            "samples_generated": len(generated),
+            "samples_requested": num_samples,
+            "output_path": output_path,
+            "format": fmt,
+            "topic": topic,
+            "message": f"Generated {len(generated)} training samples. Saved to {output_path}",
+        }
+    )
+
+
+def _evaluate_with_llm(
+    model_outputs: list[str],
+    questions: list[str],
+    criteria: str = "relevance, accuracy, helpfulness",
+) -> str:
+    """Evaluate model outputs using NVIDIA NIM as judge."""
+    from openai import OpenAI
+
+    from llm_forge.chat.nvidia_provider import NVIDIA_BASE_URL, get_nvidia_api_key
+
+    client = OpenAI(base_url=NVIDIA_BASE_URL, api_key=get_nvidia_api_key())
+
+    evaluations: list[dict] = []
+    for q, output in zip(questions, model_outputs, strict=False):
+        prompt = (
+            f"Evaluate this AI model's response on: {criteria}\n\n"
+            f"Question: {q}\n"
+            f"Model Response: {output}\n\n"
+            "Score each criterion 1-5 and explain briefly. Format as JSON:\n"
+            '{"scores": {"relevance": N, "accuracy": N, "helpfulness": N}, '
+            '"overall": N, "feedback": "brief feedback"}'
+        )
+
+        try:
+            response = client.chat.completions.create(
+                model="meta/llama-3.3-70b-instruct",
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=500,
+                temperature=0.1,
+            )
+            text = response.choices[0].message.content or ""
+            # Try to parse JSON from response
+            parsed = False
+            for line in text.split("\n"):
+                line = line.strip()
+                if line.startswith("{"):
+                    try:
+                        eval_result = json.loads(line)
+                        eval_result["question"] = q[:100]
+                        evaluations.append(eval_result)
+                        parsed = True
+                        break
+                    except json.JSONDecodeError:
+                        continue
+            if not parsed:
+                evaluations.append({"question": q[:100], "error": "Failed to parse judge response"})
+        except Exception as e:
+            evaluations.append({"question": q[:100], "error": str(e)})
+
+    # Calculate averages
+    scores = [e.get("overall", 0) for e in evaluations if "overall" in e]
+    avg = sum(scores) / len(scores) if scores else 0
+
+    return json.dumps(
+        {
+            "status": "ok",
+            "evaluations": evaluations,
+            "average_score": round(avg, 2),
+            "samples_evaluated": len(evaluations),
+            "criteria": criteria,
+        },
+        indent=2,
+    )
