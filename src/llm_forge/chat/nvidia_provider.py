@@ -162,6 +162,20 @@ NVIDIA_MODELS = {
 
 DEFAULT_NVIDIA_MODEL = "llama-3.3-70b"
 
+# Embedding models for RAG / semantic search / deduplication
+NVIDIA_EMBEDDING_MODELS = {
+    "nv-embedqa-e5-v5": {
+        "id": "nvidia/nv-embedqa-e5-v5",
+        "name": "NVIDIA EmbedQA E5 v5",
+        "dim": 1024,
+    },
+    "bge-m3": {
+        "id": "baai/bge-m3",
+        "name": "BGE-M3 (multilingual)",
+        "dim": 1024,
+    },
+}
+
 
 def call_nvidia(
     messages: list[dict],

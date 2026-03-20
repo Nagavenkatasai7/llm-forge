@@ -631,3 +631,497 @@ class TestEvaluateWithLlm:
 
         assert result["status"] == "ok"
         assert len(result["evaluations"][0]["question"]) == 100
+
+
+# ===================================================================
+# NVIDIA-powered tools: test_model
+# ===================================================================
+
+
+class TestTestModel:
+    """Test _test_model() via execute_tool (mocked NVIDIA API)."""
+
+    def _make_mock_response(self, content: str, total_tokens: int = 42):
+        """Build a mock OpenAI ChatCompletion-like response with usage."""
+        from types import SimpleNamespace
+
+        choice = SimpleNamespace()
+        choice.message = SimpleNamespace()
+        choice.message.content = content
+        usage = SimpleNamespace()
+        usage.total_tokens = total_tokens
+        resp = SimpleNamespace()
+        resp.choices = [choice]
+        resp.usage = usage
+        return resp
+
+    def test_test_model_basic(self) -> None:
+        """Tests a single question and returns the model's answer."""
+        from unittest.mock import MagicMock, patch
+
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.return_value = self._make_mock_response(
+            "Python is a programming language.", total_tokens=50
+        )
+
+        with patch("openai.OpenAI", return_value=mock_client):
+            result = json.loads(
+                execute_tool(
+                    "test_model",
+                    {
+                        "model": "meta/llama-3.2-3b-instruct",
+                        "question": "What is Python?",
+                    },
+                )
+            )
+
+        assert result["status"] == "ok"
+        assert result["model"] == "meta/llama-3.2-3b-instruct"
+        assert result["total_questions"] == 1
+        assert len(result["results"]) == 1
+        assert result["results"][0]["question"] == "What is Python?"
+        assert result["results"][0]["answer"] == "Python is a programming language."
+        assert result["results"][0]["tokens_used"] == 50
+
+    def test_test_model_multiple_questions(self) -> None:
+        """Tests multiple newline-separated questions."""
+        from unittest.mock import MagicMock, patch
+
+        responses = [
+            self._make_mock_response("Answer 1", total_tokens=30),
+            self._make_mock_response("Answer 2", total_tokens=40),
+            self._make_mock_response("Answer 3", total_tokens=35),
+        ]
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.side_effect = responses
+
+        with patch("openai.OpenAI", return_value=mock_client):
+            result = json.loads(
+                execute_tool(
+                    "test_model",
+                    {
+                        "model": "meta/llama-3.1-8b-instruct",
+                        "question": "What is AI?\nWhat is ML?\nWhat is DL?",
+                        "num_questions": 3,
+                    },
+                )
+            )
+
+        assert result["status"] == "ok"
+        assert result["total_questions"] == 3
+        assert len(result["results"]) == 3
+        assert result["results"][0]["question"] == "What is AI?"
+        assert result["results"][0]["answer"] == "Answer 1"
+        assert result["results"][1]["question"] == "What is ML?"
+        assert result["results"][2]["question"] == "What is DL?"
+
+    def test_test_model_error_handling(self) -> None:
+        """API error for a question produces an error entry, not a crash."""
+        from unittest.mock import MagicMock, patch
+
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.side_effect = RuntimeError("Model not found")
+
+        with patch("openai.OpenAI", return_value=mock_client):
+            result = json.loads(
+                execute_tool(
+                    "test_model",
+                    {
+                        "model": "nonexistent/model",
+                        "question": "Hello?",
+                    },
+                )
+            )
+
+        assert result["status"] == "ok"
+        assert result["total_questions"] == 1
+        assert "error" in result["results"][0]
+        assert "Model not found" in result["results"][0]["error"]
+        assert result["results"][0]["model"] == "nonexistent/model"
+
+
+# ===================================================================
+# NVIDIA-powered tools: generate_embeddings
+# ===================================================================
+
+
+class TestGenerateEmbeddings:
+    """Test _generate_embeddings() via execute_tool (mocked NVIDIA API)."""
+
+    def _make_mock_embedding_response(self, texts: list[str], dim: int = 1024):
+        """Build a mock OpenAI Embeddings response."""
+        from types import SimpleNamespace
+
+        data = []
+        for i, _text in enumerate(texts):
+            item = SimpleNamespace()
+            item.index = i
+            item.embedding = [0.1 * (i + 1)] * dim
+            data.append(item)
+
+        resp = SimpleNamespace()
+        resp.data = data
+        return resp
+
+    def test_generate_embeddings_basic(self) -> None:
+        """Embeds texts and returns previews with metadata."""
+        from unittest.mock import MagicMock, patch
+
+        texts = ["What is machine learning?", "How does fine-tuning work?"]
+        mock_client = MagicMock()
+        mock_client.embeddings.create.return_value = self._make_mock_embedding_response(texts)
+
+        with patch("openai.OpenAI", return_value=mock_client):
+            result = json.loads(
+                execute_tool(
+                    "generate_embeddings",
+                    {"texts": texts},
+                )
+            )
+
+        assert result["status"] == "ok"
+        assert result["model"] == "nvidia/nv-embedqa-e5-v5"
+        assert result["num_texts"] == 2
+        assert result["embedding_dimension"] == 1024
+        assert len(result["previews"]) == 2
+        assert result["previews"][0]["embedding_dim"] == 1024
+        # Preview should only contain first 5 embedding values
+        assert len(result["previews"][0]["embedding"]) == 5
+        # Text preview should be truncated to 100 chars
+        assert result["previews"][0]["text"] == "What is machine learning?"
+
+    def test_generate_embeddings_save_to_file(self, tmp_path: Path) -> None:
+        """When output_path is provided, full embeddings are saved to JSON."""
+        from unittest.mock import MagicMock, patch
+
+        texts = ["Hello world", "Goodbye world"]
+        mock_client = MagicMock()
+        mock_client.embeddings.create.return_value = self._make_mock_embedding_response(
+            texts, dim=512
+        )
+
+        output_path = str(tmp_path / "nested" / "embeddings.json")
+        with patch("openai.OpenAI", return_value=mock_client):
+            result = json.loads(
+                execute_tool(
+                    "generate_embeddings",
+                    {
+                        "texts": texts,
+                        "model": "baai/bge-m3",
+                        "output_path": output_path,
+                    },
+                )
+            )
+
+        assert result["status"] == "ok"
+        assert result["saved_to"] == output_path
+        assert result["model"] == "baai/bge-m3"
+        assert Path(output_path).exists()
+
+        # Verify saved content has full embeddings
+        with open(output_path) as f:
+            saved = json.load(f)
+        assert len(saved) == 2
+        assert saved[0]["text"] == "Hello world"
+        assert len(saved[0]["embedding"]) == 512
+
+    def test_generate_embeddings_error(self) -> None:
+        """Returns error status when the NVIDIA embedding API call fails."""
+        from unittest.mock import MagicMock, patch
+
+        mock_client = MagicMock()
+        mock_client.embeddings.create.side_effect = RuntimeError("Model not available")
+
+        with patch("openai.OpenAI", return_value=mock_client):
+            result = json.loads(
+                execute_tool(
+                    "generate_embeddings",
+                    {"texts": ["test text"]},
+                )
+            )
+
+        assert result["status"] == "error"
+        assert "Model not available" in result["error"]
+
+
+# ===================================================================
+# NVIDIA-powered tools: generate_script
+# ===================================================================
+
+
+class TestGenerateScript:
+    """Test _generate_script() via execute_tool (mocked NVIDIA API)."""
+
+    def _make_mock_response(self, content: str):
+        """Build a mock OpenAI ChatCompletion-like response."""
+        from types import SimpleNamespace
+
+        choice = SimpleNamespace()
+        choice.message = SimpleNamespace()
+        choice.message.content = content
+        resp = SimpleNamespace()
+        resp.choices = [choice]
+        return resp
+
+    def test_generate_script_basic(self, tmp_path: Path) -> None:
+        """Generates a script and saves it to the output path."""
+        from unittest.mock import MagicMock, patch
+
+        script_code = (
+            "import pathlib\n\ndef main():\n    print('hello')\n\n"
+            "if __name__ == '__main__':\n    main()\n"
+        )
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.return_value = self._make_mock_response(script_code)
+
+        output_path = str(tmp_path / "convert.py")
+        with patch("openai.OpenAI", return_value=mock_client):
+            result = json.loads(
+                execute_tool(
+                    "generate_script",
+                    {
+                        "task_description": "convert CSV to JSONL",
+                        "output_path": output_path,
+                    },
+                )
+            )
+
+        assert result["status"] == "ok"
+        assert result["output_path"] == output_path
+        assert result["lines"] > 0
+        assert Path(output_path).exists()
+
+        # Verify the script content was written
+        written = Path(output_path).read_text()
+        assert "def main():" in written
+
+    def test_generate_script_extracts_code_block(self, tmp_path: Path) -> None:
+        """Extracts code from markdown ```python code blocks."""
+        from unittest.mock import MagicMock, patch
+
+        wrapped_code = (
+            "Here is the script:\n"
+            "```python\n"
+            "import sys\n\ndef main():\n    print('extracted')\n\n"
+            "if __name__ == '__main__':\n    main()\n"
+            "```\n"
+            "This script converts files."
+        )
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.return_value = self._make_mock_response(wrapped_code)
+
+        output_path = str(tmp_path / "script.py")
+        with patch("openai.OpenAI", return_value=mock_client):
+            result = json.loads(
+                execute_tool(
+                    "generate_script",
+                    {
+                        "task_description": "do something",
+                        "output_path": output_path,
+                    },
+                )
+            )
+
+        assert result["status"] == "ok"
+        written = Path(output_path).read_text()
+        # Should NOT contain the markdown fence or explanation text
+        assert "```" not in written
+        assert "Here is the script" not in written
+        assert "import sys" in written
+
+    def test_generate_script_with_input_output_files(self, tmp_path: Path) -> None:
+        """Input/output file names are passed to the prompt."""
+        from unittest.mock import MagicMock, patch
+
+        script_code = "print('done')\n"
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.return_value = self._make_mock_response(script_code)
+
+        output_path = str(tmp_path / "proc.py")
+        with patch("openai.OpenAI", return_value=mock_client):
+            result = json.loads(
+                execute_tool(
+                    "generate_script",
+                    {
+                        "task_description": "process data",
+                        "output_path": output_path,
+                        "input_file": "data.csv",
+                        "output_file": "data.jsonl",
+                    },
+                )
+            )
+
+        assert result["status"] == "ok"
+        # Verify file context was passed in the prompt
+        call_args = mock_client.chat.completions.create.call_args
+        prompt_text = call_args.kwargs["messages"][1]["content"]
+        assert "data.csv" in prompt_text
+        assert "data.jsonl" in prompt_text
+
+    def test_generate_script_api_error(self, tmp_path: Path) -> None:
+        """Returns error status when the NVIDIA API call fails."""
+        from unittest.mock import MagicMock, patch
+
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.side_effect = RuntimeError("API down")
+
+        with patch("openai.OpenAI", return_value=mock_client):
+            result = json.loads(
+                execute_tool(
+                    "generate_script",
+                    {
+                        "task_description": "something",
+                        "output_path": str(tmp_path / "fail.py"),
+                    },
+                )
+            )
+
+        assert result["status"] == "error"
+        assert "API down" in result["error"]
+
+
+# ===================================================================
+# NVIDIA-powered tools: compare_models
+# ===================================================================
+
+
+class TestCompareModels:
+    """Test _compare_models() via execute_tool (mocked NVIDIA API)."""
+
+    def _make_mock_response(self, content: str):
+        """Build a mock OpenAI ChatCompletion-like response."""
+        from types import SimpleNamespace
+
+        choice = SimpleNamespace()
+        choice.message = SimpleNamespace()
+        choice.message.content = content
+        resp = SimpleNamespace()
+        resp.choices = [choice]
+        return resp
+
+    def test_compare_models_basic(self) -> None:
+        """Compares two models on one question and returns a verdict."""
+        from unittest.mock import MagicMock, patch
+
+        responses = [
+            self._make_mock_response("Answer from model A"),
+            self._make_mock_response("Answer from model B"),
+            self._make_mock_response('{"winner": "A", "reason": "More detailed"}'),
+        ]
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.side_effect = responses
+
+        with patch("openai.OpenAI", return_value=mock_client):
+            result = json.loads(
+                execute_tool(
+                    "compare_models",
+                    {
+                        "model_a": "meta/llama-3.2-1b-instruct",
+                        "model_b": "meta/llama-3.2-3b-instruct",
+                        "questions": ["What is machine learning?"],
+                    },
+                )
+            )
+
+        assert result["status"] == "ok"
+        assert result["model_a"] == "meta/llama-3.2-1b-instruct"
+        assert result["model_b"] == "meta/llama-3.2-3b-instruct"
+        assert result["summary"]["model_a_wins"] == 1
+        assert result["summary"]["model_b_wins"] == 0
+        assert result["summary"]["ties"] == 0
+        assert result["summary"]["total"] == 1
+        assert len(result["results"]) == 1
+        assert result["results"][0]["winner"] == "A"
+
+    def test_compare_models_with_winner_b(self) -> None:
+        """When model B wins, verdict reflects that."""
+        from unittest.mock import MagicMock, patch
+
+        responses = [
+            self._make_mock_response("Weak answer from A"),
+            self._make_mock_response("Strong answer from B"),
+            self._make_mock_response('{"winner": "B", "reason": "Much better"}'),
+        ]
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.side_effect = responses
+
+        with patch("openai.OpenAI", return_value=mock_client):
+            result = json.loads(
+                execute_tool(
+                    "compare_models",
+                    {
+                        "model_a": "model-a",
+                        "model_b": "model-b",
+                        "questions": ["Explain AI"],
+                    },
+                )
+            )
+
+        assert result["summary"]["model_b_wins"] == 1
+        assert result["verdict"] == "model-b wins"
+
+    def test_compare_models_multiple_questions(self) -> None:
+        """Works with multiple questions and tallies results correctly."""
+        from unittest.mock import MagicMock, patch
+
+        responses = [
+            # Q1: model A answer, model B answer, judge
+            self._make_mock_response("A1"),
+            self._make_mock_response("B1"),
+            self._make_mock_response('{"winner": "A", "reason": "Better"}'),
+            # Q2: model A answer, model B answer, judge
+            self._make_mock_response("A2"),
+            self._make_mock_response("B2"),
+            self._make_mock_response('{"winner": "B", "reason": "Better"}'),
+        ]
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.side_effect = responses
+
+        with patch("openai.OpenAI", return_value=mock_client):
+            result = json.loads(
+                execute_tool(
+                    "compare_models",
+                    {
+                        "model_a": "model-a",
+                        "model_b": "model-b",
+                        "questions": ["Q1?", "Q2?"],
+                    },
+                )
+            )
+
+        assert result["summary"]["model_a_wins"] == 1
+        assert result["summary"]["model_b_wins"] == 1
+        assert result["summary"]["ties"] == 0
+        assert result["summary"]["total"] == 2
+        assert result["verdict"] == "Tie"
+
+    def test_compare_models_judge_unavailable(self) -> None:
+        """When judge API fails, result is counted as a tie."""
+        from unittest.mock import MagicMock, patch
+
+        responses = [
+            self._make_mock_response("A answer"),
+            self._make_mock_response("B answer"),
+        ]
+        mock_client = MagicMock()
+        # First two calls succeed (model responses), third fails (judge)
+        mock_client.chat.completions.create.side_effect = [
+            *responses,
+            RuntimeError("Judge API down"),
+        ]
+
+        with patch("openai.OpenAI", return_value=mock_client):
+            result = json.loads(
+                execute_tool(
+                    "compare_models",
+                    {
+                        "model_a": "model-a",
+                        "model_b": "model-b",
+                        "questions": ["Q?"],
+                    },
+                )
+            )
+
+        assert result["summary"]["ties"] == 1
+        assert result["results"][0]["winner"] == "tie"
+        assert result["results"][0]["reason"] == "Judge unavailable"

@@ -346,6 +346,40 @@ def _cmd_model(engine: ChatEngine, args: str) -> str:
     return f"Switched to {info['name']} ({info['context']}, {info['cost']} per 1M tokens)"
 
 
+def _cmd_test(engine: ChatEngine, args: str) -> str:
+    """Quick-test a model with a question."""
+    if not args:
+        return (
+            "Usage: /test <question>\nTests the current model. Use /model to switch models first."
+        )
+
+    from openai import OpenAI
+
+    from llm_forge.chat.nvidia_provider import (
+        NVIDIA_BASE_URL,
+        NVIDIA_MODELS,
+        get_nvidia_api_key,
+    )
+
+    # Get current model
+    model_info = NVIDIA_MODELS.get(engine.model_key)
+    if model_info is None:
+        return "No NVIDIA model selected. Use /model to select one."
+
+    try:
+        client = OpenAI(base_url=NVIDIA_BASE_URL, api_key=get_nvidia_api_key())
+        response = client.chat.completions.create(
+            model=model_info["id"],
+            messages=[{"role": "user", "content": args}],
+            max_tokens=300,
+            temperature=0.1,
+        )
+        answer = response.choices[0].message.content or "(no response)"
+        return f"Model: {model_info['name']}\nQ: {args}\nA: {answer}"
+    except Exception as e:
+        return f"Error testing model: {e}"
+
+
 def _cmd_paste(engine: ChatEngine, args: str) -> str:
     """Enter multi-line paste mode (type --- on a new line to submit)."""
     # Return a special sentinel so the UI loop can handle interactive input.
@@ -385,6 +419,10 @@ COMMANDS: dict[str, dict] = {
     "/paste": {
         "description": "Enter multi-line paste mode (--- to submit)",
         "handler": _cmd_paste,
+    },
+    "/test": {
+        "description": "Quick-test current model (e.g. /test What is machine learning?)",
+        "handler": _cmd_test,
     },
 }
 

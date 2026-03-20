@@ -70,6 +70,10 @@ size). Never start training that will OOM.
 ### Data Generation & Evaluation
 - **generate_training_data**: Create synthetic training data from a topic description
 - **evaluate_with_llm**: Score your model's outputs using an AI judge
+- **test_model**: Chat with any base model to test what it knows before fine-tuning
+- **generate_embeddings**: Create text embeddings for RAG, semantic search, or deduplication
+- **generate_script**: Generate Python scripts for data preprocessing, conversion, scraping
+- **compare_models**: A/B test two models on the same questions with AI judging
 
 ### Evaluation & Deployment
 - **run_evaluation**: Run benchmarks

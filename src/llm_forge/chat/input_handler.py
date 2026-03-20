@@ -24,6 +24,7 @@ SLASH_COMMANDS = [
     "/version",
     "/model",
     "/paste",
+    "/test",
 ]
 
 

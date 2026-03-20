@@ -529,6 +529,127 @@ TOOLS = [
             "required": ["model_outputs", "questions"],
         },
     },
+    # ----- Test model (NVIDIA API) -----
+    {
+        "name": "test_model",
+        "description": "Chat with any base model through NVIDIA API to test what it knows before fine-tuning. Send a question and get the model's response. Use this to evaluate if a model needs training on a topic.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "model": {
+                    "type": "string",
+                    "description": "Model to test (e.g., 'meta/llama-3.2-3b-instruct', 'meta/llama-3.1-8b-instruct'). Use NVIDIA NIM model IDs.",
+                },
+                "question": {
+                    "type": "string",
+                    "description": "Question to ask the model",
+                },
+                "system_prompt": {
+                    "type": "string",
+                    "description": "Optional system prompt to set the model's role",
+                    "default": "You are a helpful AI assistant.",
+                },
+                "num_questions": {
+                    "type": "integer",
+                    "description": "If provided, test with multiple questions (pass questions as newline-separated in 'question' field)",
+                    "default": 1,
+                },
+            },
+            "required": ["model", "question"],
+        },
+    },
+    # ----- NVIDIA-powered tools: embeddings -----
+    {
+        "name": "generate_embeddings",
+        "description": "Generate text embeddings using NVIDIA's embedding models for RAG, semantic search, or data deduplication. Supports batch processing.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "texts": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "List of texts to embed",
+                },
+                "model": {
+                    "type": "string",
+                    "description": "Embedding model (default: nvidia/nv-embedqa-e5-v5)",
+                    "default": "nvidia/nv-embedqa-e5-v5",
+                },
+                "output_path": {
+                    "type": "string",
+                    "description": "Optional: save embeddings to a JSON file",
+                },
+            },
+            "required": ["texts"],
+        },
+    },
+    # ----- Code generation & A/B testing (NVIDIA API) -----
+    {
+        "name": "generate_script",
+        "description": (
+            "Generate a Python script for data preprocessing, format conversion, "
+            "web scraping, or other custom tasks. Uses a code-specialized AI model."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "task_description": {
+                    "type": "string",
+                    "description": (
+                        "What the script should do (e.g., 'convert CSV to JSONL "
+                        "Alpaca format', 'scrape FAQ from website')"
+                    ),
+                },
+                "output_path": {
+                    "type": "string",
+                    "description": (
+                        "Where to save the script (default: scripts/generated_script.py)"
+                    ),
+                    "default": "scripts/generated_script.py",
+                },
+                "input_file": {
+                    "type": "string",
+                    "description": "Optional: input file the script should process",
+                },
+                "output_file": {
+                    "type": "string",
+                    "description": "Optional: output file the script should produce",
+                },
+            },
+            "required": ["task_description"],
+        },
+    },
+    {
+        "name": "compare_models",
+        "description": (
+            "A/B test two models by asking the same questions to both and comparing "
+            "their responses. Uses an AI judge to score each response."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "model_a": {
+                    "type": "string",
+                    "description": "First model (NVIDIA model ID)",
+                },
+                "model_b": {
+                    "type": "string",
+                    "description": "Second model (NVIDIA model ID)",
+                },
+                "questions": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Questions to test both models on",
+                },
+                "system_prompt": {
+                    "type": "string",
+                    "description": "System prompt for both models",
+                    "default": "You are a helpful AI assistant.",
+                },
+            },
+            "required": ["model_a", "model_b", "questions"],
+        },
+    },
     # ----- Execution tools (system-level, permission-gated) -----
     *EXECUTION_TOOLS,
 ]
@@ -627,6 +748,33 @@ def execute_tool(name: str, input_data: dict) -> str:
                 model_outputs=input_data["model_outputs"],
                 questions=input_data["questions"],
                 criteria=input_data.get("criteria", "relevance, accuracy, helpfulness"),
+            )
+        elif name == "test_model":
+            return _test_model(
+                model=input_data["model"],
+                question=input_data["question"],
+                system_prompt=input_data.get("system_prompt", "You are a helpful AI assistant."),
+                num_questions=input_data.get("num_questions", 1),
+            )
+        elif name == "generate_embeddings":
+            return _generate_embeddings(
+                texts=input_data["texts"],
+                model=input_data.get("model", "nvidia/nv-embedqa-e5-v5"),
+                output_path=input_data.get("output_path"),
+            )
+        elif name == "generate_script":
+            return _generate_script(
+                task_description=input_data["task_description"],
+                output_path=input_data.get("output_path", "scripts/generated_script.py"),
+                input_file=input_data.get("input_file"),
+                output_file=input_data.get("output_file"),
+            )
+        elif name == "compare_models":
+            return _compare_models(
+                model_a=input_data["model_a"],
+                model_b=input_data["model_b"],
+                questions=input_data["questions"],
+                system_prompt=input_data.get("system_prompt", "You are a helpful AI assistant."),
             )
         elif name in EXECUTION_TOOL_NAMES:
             return execute_execution_tool(name, input_data)
@@ -1932,6 +2080,320 @@ def _evaluate_with_llm(
             "average_score": round(avg, 2),
             "samples_evaluated": len(evaluations),
             "criteria": criteria,
+        },
+        indent=2,
+    )
+
+
+def _test_model(
+    model: str,
+    question: str,
+    system_prompt: str = "You are a helpful AI assistant.",
+    num_questions: int = 1,
+) -> str:
+    """Test a base model via NVIDIA NIM to see its capabilities."""
+    from openai import OpenAI
+
+    from llm_forge.chat.nvidia_provider import NVIDIA_BASE_URL, get_nvidia_api_key
+
+    client = OpenAI(base_url=NVIDIA_BASE_URL, api_key=get_nvidia_api_key())
+
+    # Handle multiple questions
+    if num_questions > 1:
+        questions = [q.strip() for q in question.split("\n") if q.strip()]
+    else:
+        questions = [question]
+
+    results: list[dict] = []
+    for q in questions:
+        try:
+            response = client.chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": q},
+                ],
+                max_tokens=500,
+                temperature=0.1,
+            )
+            answer = response.choices[0].message.content or ""
+            results.append(
+                {
+                    "question": q,
+                    "answer": answer,
+                    "model": model,
+                    "tokens_used": (response.usage.total_tokens if response.usage else 0),
+                }
+            )
+        except Exception as e:
+            results.append({"question": q, "error": str(e), "model": model})
+
+    return json.dumps(
+        {
+            "status": "ok",
+            "model": model,
+            "results": results,
+            "total_questions": len(results),
+            "message": f"Tested {model} with {len(results)} question(s)",
+        },
+        indent=2,
+    )
+
+
+def _generate_embeddings(
+    texts: list[str],
+    model: str = "nvidia/nv-embedqa-e5-v5",
+    output_path: str | None = None,
+) -> str:
+    """Generate embeddings using NVIDIA NIM embedding models."""
+    from openai import OpenAI
+
+    from llm_forge.chat.nvidia_provider import NVIDIA_BASE_URL, get_nvidia_api_key
+
+    client = OpenAI(base_url=NVIDIA_BASE_URL, api_key=get_nvidia_api_key())
+
+    try:
+        # NVIDIA embedding API is OpenAI-compatible
+        response = client.embeddings.create(
+            model=model,
+            input=texts,
+            encoding_format="float",
+        )
+
+        embeddings = []
+        for item in response.data:
+            embeddings.append(
+                {
+                    "text": texts[item.index][:100],  # Preview only
+                    "embedding_dim": len(item.embedding),
+                    "embedding": item.embedding[:5],  # First 5 values as preview
+                }
+            )
+
+        result: dict = {
+            "status": "ok",
+            "model": model,
+            "num_texts": len(texts),
+            "embedding_dimension": (len(response.data[0].embedding) if response.data else 0),
+            "previews": embeddings[:3],  # Show first 3
+            "message": (
+                f"Generated {len(texts)} embeddings ({len(response.data[0].embedding)}d)"
+                if response.data
+                else f"Generated {len(texts)} embeddings"
+            ),
+        }
+
+        # Save full embeddings if path provided
+        if output_path:
+            full_data = []
+            for item in response.data:
+                full_data.append(
+                    {
+                        "text": texts[item.index],
+                        "embedding": item.embedding,
+                    }
+                )
+
+            Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+            with open(output_path, "w") as f:
+                json.dump(full_data, f)
+            result["saved_to"] = output_path
+
+        return json.dumps(result, indent=2)
+    except Exception as e:
+        return json.dumps({"status": "error", "error": str(e)})
+
+
+def _generate_script(
+    task_description: str,
+    output_path: str = "scripts/generated_script.py",
+    input_file: str | None = None,
+    output_file: str | None = None,
+) -> str:
+    """Generate a Python script using NVIDIA's code model."""
+    from openai import OpenAI
+
+    from llm_forge.chat.nvidia_provider import NVIDIA_BASE_URL, get_nvidia_api_key
+
+    client = OpenAI(base_url=NVIDIA_BASE_URL, api_key=get_nvidia_api_key())
+
+    context = f"Task: {task_description}"
+    if input_file:
+        context += f"\nInput file: {input_file}"
+    if output_file:
+        context += f"\nOutput file: {output_file}"
+
+    prompt = f"""Write a complete, runnable Python script for this task:
+
+{context}
+
+Requirements:
+- Include all necessary imports
+- Add error handling
+- Add a main() function
+- Add if __name__ == "__main__" guard
+- Print progress messages
+- Handle file not found errors gracefully
+- Use pathlib for file paths
+
+Write ONLY the Python code, no explanations:"""
+
+    try:
+        response = client.chat.completions.create(
+            model="meta/llama-3.3-70b-instruct",
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You are an expert Python programmer. Write clean, production-quality code."
+                    ),
+                },
+                {"role": "user", "content": prompt},
+            ],
+            max_tokens=2000,
+            temperature=0.1,
+        )
+
+        code = response.choices[0].message.content or ""
+
+        # Extract code from markdown code blocks if present
+        if "```python" in code:
+            code = code.split("```python")[1].split("```")[0].strip()
+        elif "```" in code:
+            code = code.split("```")[1].split("```")[0].strip()
+
+        # Save script
+        Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+        with open(output_path, "w") as f:
+            f.write(code)
+
+        # Count lines
+        lines = len(code.strip().split("\n"))
+
+        return json.dumps(
+            {
+                "status": "ok",
+                "output_path": output_path,
+                "lines": lines,
+                "preview": code[:300],
+                "message": f"Script generated ({lines} lines). Saved to {output_path}",
+            }
+        )
+    except Exception as e:
+        return json.dumps({"status": "error", "error": str(e)})
+
+
+def _compare_models(
+    model_a: str,
+    model_b: str,
+    questions: list[str],
+    system_prompt: str = "You are a helpful AI assistant.",
+) -> str:
+    """A/B test two models on the same questions with AI judging."""
+    from openai import OpenAI
+
+    from llm_forge.chat.nvidia_provider import NVIDIA_BASE_URL, get_nvidia_api_key
+
+    client = OpenAI(base_url=NVIDIA_BASE_URL, api_key=get_nvidia_api_key())
+
+    comparisons: list[dict] = []
+    a_wins = 0
+    b_wins = 0
+    ties = 0
+
+    for q in questions:
+        comp: dict = {"question": q}
+
+        # Get response from both models
+        for label, model in [("model_a", model_a), ("model_b", model_b)]:
+            try:
+                resp = client.chat.completions.create(
+                    model=model,
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": q},
+                    ],
+                    max_tokens=300,
+                    temperature=0.1,
+                )
+                comp[label] = resp.choices[0].message.content or ""
+            except Exception as e:
+                comp[label] = f"[Error: {e}]"
+
+        # Judge with a large model
+        try:
+            judge_prompt = (
+                "Compare these two AI responses to the same question.\n\n"
+                f"Question: {q}\n\n"
+                f"Response A ({model_a}):\n"
+                f"{comp.get('model_a', '')}\n\n"
+                f"Response B ({model_b}):\n"
+                f"{comp.get('model_b', '')}\n\n"
+                "Which response is better? Reply with ONLY a JSON object:\n"
+                '{"winner": "A" or "B" or "tie", "reason": "brief explanation"}'
+            )
+
+            judge_resp = client.chat.completions.create(
+                model="meta/llama-3.3-70b-instruct",
+                messages=[{"role": "user", "content": judge_prompt}],
+                max_tokens=200,
+                temperature=0.1,
+            )
+
+            judge_text = judge_resp.choices[0].message.content or ""
+            # Parse judge response
+            parsed_verdict = False
+            for line in judge_text.split("\n"):
+                line = line.strip()
+                if line.startswith("{"):
+                    try:
+                        verdict = json.loads(line)
+                        comp["winner"] = verdict.get("winner", "tie")
+                        comp["reason"] = verdict.get("reason", "")
+                        if comp["winner"] == "A":
+                            a_wins += 1
+                        elif comp["winner"] == "B":
+                            b_wins += 1
+                        else:
+                            ties += 1
+                        parsed_verdict = True
+                        break
+                    except json.JSONDecodeError:
+                        continue
+            if not parsed_verdict:
+                comp["winner"] = "tie"
+                comp["reason"] = "Could not parse judge response"
+                ties += 1
+        except Exception:
+            comp["winner"] = "tie"
+            comp["reason"] = "Judge unavailable"
+            ties += 1
+
+        comparisons.append(comp)
+
+    if a_wins > b_wins:
+        verdict_str = f"{model_a} wins"
+    elif b_wins > a_wins:
+        verdict_str = f"{model_b} wins"
+    else:
+        verdict_str = "Tie"
+
+    return json.dumps(
+        {
+            "status": "ok",
+            "model_a": model_a,
+            "model_b": model_b,
+            "results": comparisons,
+            "summary": {
+                "model_a_wins": a_wins,
+                "model_b_wins": b_wins,
+                "ties": ties,
+                "total": len(questions),
+            },
+            "verdict": verdict_str,
+            "message": (
+                f"A/B test: {model_a} ({a_wins} wins) vs {model_b} ({b_wins} wins), {ties} ties"
+            ),
         },
         indent=2,
     )

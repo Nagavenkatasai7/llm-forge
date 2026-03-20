@@ -105,6 +105,7 @@ def test_slash_commands_in_completer():
         "/version",
         "/model",
         "/paste",
+        "/test",
     }
     assert expected == set(SLASH_COMMANDS)
 
