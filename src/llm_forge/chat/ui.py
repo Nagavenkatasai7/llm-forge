@@ -204,10 +204,10 @@ def _print_tool_action(
     input_data: dict | None = None,
     description: str = "",
 ) -> None:
-    """Show a tool execution indicator line with context.
+    """Show a tool execution indicator line with a vertical bar for grouping.
 
-    Displays a dim, indented label showing what tool is being called
-    and with what arguments, in a Claude Code-inspired style.
+    Displays a dim, indented label with a pipe prefix showing what tool
+    is being called and with what arguments, giving a pipeline look.
     """
     console = _get_console()
     if description:
@@ -215,9 +215,9 @@ def _print_tool_action(
     else:
         label = _format_tool_detail(tool_name, input_data)
     if console is not None:
-        console.print(f"  [dim cyan]{label}[/dim cyan]")
+        console.print(f"  [dim cyan]| {label}[/dim cyan]")
     else:
-        print(f"  {label}")
+        print(f"  | {label}")
 
 
 def _print_tool_result_summary(tool_name: str, result_json: str) -> None:
@@ -227,9 +227,9 @@ def _print_tool_result_summary(tool_name: str, result_json: str) -> None:
         return
     console = _get_console()
     if console is not None:
-        console.print(f"    [dim]{summary}[/dim]")
+        console.print(f"  [dim]|   {summary}[/dim]")
     else:
-        print(f"    {summary}")
+        print(f"  |   {summary}")
 
 
 # ---------------------------------------------------------------------------
@@ -281,6 +281,31 @@ def _print_error(msg: str) -> None:
         print(f"\n  [error] {msg}\n")
 
 
+def _print_model_info(engine: ChatEngine) -> None:
+    """Display the active model and provider as an info line below the banner."""
+    if engine.provider == "nvidia":
+        from llm_forge.chat.nvidia_provider import DEFAULT_NVIDIA_MODEL, NVIDIA_MODELS
+
+        info = NVIDIA_MODELS.get(engine.model_key or DEFAULT_NVIDIA_MODEL, {})
+        name = info.get("name", engine.model_key or "?")
+        params = info.get("params", "")
+        label = f"Model: {name}"
+        if params:
+            label += f" ({params})"
+        label += " -- free via NVIDIA NIM"
+        _print_info(label)
+        _print_info("Type /model to switch models, /help for all commands")
+    elif engine.provider == "anthropic":
+        from llm_forge.chat.engine import CLAUDE_MODELS, DEFAULT_MODEL
+
+        info = CLAUDE_MODELS.get(engine.model_key or DEFAULT_MODEL, {})
+        name = info.get("name", engine.model_key or "?")
+        _print_info(f"Model: {name}")
+        _print_info("Type /model to switch models, /help for all commands")
+    else:
+        _print_info("Type /help for all commands")
+
+
 def _print_setup_plan(plan: dict[str, Any]) -> None:
     """Display the scaffold plan as a Rich table (or plain text fallback)."""
     dirs = plan.get("directories_to_create", [])
@@ -328,8 +353,8 @@ def _print_setup_plan(plan: dict[str, Any]) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _print_banner() -> None:
-    """Print the welcome banner with version and quick-help hints."""
+def _print_banner(model_label: str = "") -> None:
+    """Print the welcome banner with version, quick-help hints, and model info."""
     console = _get_console()
     if console is not None:
         try:
@@ -340,16 +365,18 @@ def _print_banner() -> None:
 
             banner = Text()
             banner.append("LLM Forge", style="bold cyan")
-            banner.append(f" v{version}", style="dim")
-            banner.append("\n")
+            banner.append(f" v{version}\n", style="dim")
             banner.append("Build your own AI model. Just tell me what you want.\n\n", style="")
-            banner.append("Type ", style="dim")
             banner.append("/", style="bold yellow")
-            banner.append(" for commands  ", style="dim")
+            banner.append(" commands", style="dim")
+            banner.append("  |  ", style="dim")
             banner.append("Esc", style="bold yellow")
-            banner.append(" to interrupt  ", style="dim")
+            banner.append(" interrupt", style="dim")
+            banner.append("  |  ", style="dim")
             banner.append("quit", style="bold red")
-            banner.append(" to exit", style="dim")
+            banner.append(" exit", style="dim")
+            if model_label:
+                banner.append(f"\n{model_label}", style="dim")
 
             console.print(Panel(banner, border_style="cyan", padding=(1, 2)))
             console.print()
@@ -362,6 +389,8 @@ def _print_banner() -> None:
     print("  LLM Forge - Build your own AI model")
     print("  Just tell me what you want to build.")
     print("  Type '/' for commands, Esc to interrupt, 'quit' to exit.")
+    if model_label:
+        print(f"  {model_label}")
     print("=" * 56)
     print()
 
@@ -372,30 +401,28 @@ def _print_banner() -> None:
 
 
 def _print_response(text: str) -> None:
-    """Print assistant response with clear visual separation.
+    """Print assistant response with a labeled header and indented markdown.
 
-    Uses thin separator rules and Markdown rendering instead of a
-    heavy Panel, giving a cleaner, more modern appearance.
+    Uses a simple 'Forge:' header followed by left-padded Markdown, giving
+    a clean, readable appearance without heavy separators.
     """
     console = _get_console()
     if console is not None:
         try:
             from rich.markdown import Markdown
-            from rich.rule import Rule
+            from rich.padding import Padding
 
-            console.print(Rule(style="dim green"))
-            console.print("[bold green]Forge[/bold green]")
             console.print()
-            console.print(Markdown(text))
-            console.print()
-            console.print(Rule(style="dim green"))
+            console.print("[bold green]Forge:[/bold green]")
+            md = Markdown(text)
+            console.print(Padding(md, (0, 0, 0, 2)))
             console.print()
             return
         except ImportError:
             pass
 
     # Plain-text fallback
-    print(f"\nForge: {text}\n")
+    print(f"\nForge:\n  {text}\n")
 
 
 # ---------------------------------------------------------------------------
@@ -436,7 +463,7 @@ def _stream_response(engine: ChatEngine, user_input: str) -> None:
 
     Shows a "thinking..." indicator before the first token, displays
     detailed tool actions as they execute, and streams the final text
-    response with lightweight visual separation.
+    response with a clean 'Forge:' header and consistent indentation.
     """
     console = _get_console()
     interrupted = False
@@ -456,16 +483,16 @@ def _stream_response(engine: ChatEngine, user_input: str) -> None:
             print()
             print("  thinking...")
 
-    def _clear_thinking_for_text() -> None:
-        """Print the Forge header when the first text token arrives."""
+    def _print_forge_header() -> None:
+        """Print the Forge: header when the first text token arrives."""
         if console is not None:
             console.print()
-            console.print("[bold green]Forge[/bold green]")
-            console.print()
+            console.print("[bold green]Forge:[/bold green]")
+            console.print("  ", end="")
         else:
             print()
             print("Forge:")
-            print()
+            print("  ", end="")
 
     def on_text(chunk: str) -> None:
         """Called for each streamed text chunk."""
@@ -473,7 +500,7 @@ def _stream_response(engine: ChatEngine, user_input: str) -> None:
         text_chunks.append(chunk)
         if not first_token_received:
             first_token_received = True
-            _clear_thinking_for_text()
+            _print_forge_header()
         if console is not None:
             console.print(chunk, end="", highlight=False, soft_wrap=True)
         else:
@@ -511,7 +538,7 @@ def _stream_response(engine: ChatEngine, user_input: str) -> None:
         engine.on_tool_start = prev_start
         engine.on_tool_end = prev_end
 
-    # -- Footer --
+    # -- Footer: consistent spacing --
     if console is not None:
         console.print()  # newline after last streamed chunk
         console.print()
@@ -520,12 +547,7 @@ def _stream_response(engine: ChatEngine, user_input: str) -> None:
         print()
 
     if interrupted:
-        if console is not None:
-            console.print("  [dim italic]Interrupted -- type your next instruction[/dim italic]")
-            console.print()
-        else:
-            print("  [interrupted -- type your next instruction]")
-            print()
+        _print_info("Interrupted -- type your next instruction")
 
 
 # ---------------------------------------------------------------------------
@@ -694,9 +716,8 @@ def launch_chat(provider: str | None = None) -> None:
     # Now continue with normal engine initialization
     engine = ChatEngine(provider=provider, project_dir=".")
 
-    # If provider is nvidia (default free tier), announce it
-    if engine.provider == "nvidia":
-        _print_info("Using NVIDIA NIM (free) -- 189 models available. Type /model to switch.")
+    # Show current model info after engine is ready
+    _print_model_info(engine)
 
     # If no API key, try to load saved key or ask the user
     _pending_api_key: str | None = None
@@ -855,11 +876,10 @@ def launch_chat(provider: str | None = None) -> None:
             _stream_response(engine, user_input)
         except KeyboardInterrupt:
             if console is not None:
-                console.print(
-                    "\n  [dim italic]Interrupted -- type your next instruction[/dim italic]\n"
-                )
+                console.print()
             else:
-                print("\n  [interrupted -- type your next instruction]\n")
+                print()
+            _print_info("Interrupted -- type your next instruction")
             continue
         except Exception as e:
             _print_error(f"{e}")
