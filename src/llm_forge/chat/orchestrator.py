@@ -191,29 +191,27 @@ class OrchestratorEngine:
         model_key: str | None = None,
         gemini_api_key: str = "",
     ) -> None:
-        # --- validate Gemini key ---
-        if not gemini_api_key:
-            raise ValueError("gemini_api_key is required for sub-agents.")
+        from llm_forge.chat.api_keys import get_anthropic_api_key, get_google_api_key
 
-        # --- validate Anthropic key ---
-        api_key = os.environ.get("ANTHROPIC_API_KEY", "")
-        if not api_key:
-            raise ValueError(
-                "ANTHROPIC_API_KEY environment variable is required. "
-                "Get one at https://console.anthropic.com/"
-            )
+        # Use built-in keys if not provided
+        anthropic_key = os.environ.get("ANTHROPIC_API_KEY", "").strip() or get_anthropic_api_key()
+        google_key = gemini_api_key or get_google_api_key()
+
+        # Set env var so anthropic.Anthropic() picks it up
+        os.environ["ANTHROPIC_API_KEY"] = anthropic_key
 
         # --- Anthropic client ---
         import anthropic
 
-        self._client = anthropic.Anthropic()
+        self._client = anthropic.Anthropic(api_key=anthropic_key)
 
         # --- sub-systems ---
+        self.provider = "anthropic"  # Compatibility with _print_model_info
         self.model_key = model_key or DEFAULT_MODEL
         self.messages: list[dict[str, Any]] = []
         self.memory = MemoryManager(project_dir=project_dir or ".")
         self.permissions = PermissionSystem(auto_approve=True)
-        self.agents = AgentManager(gemini_api_key=gemini_api_key)
+        self.agents = AgentManager(gemini_api_key=google_key)
 
         # Build system prompt with memory context
         context_block = self.memory.build_context_block()

@@ -122,45 +122,15 @@ fi
 VERSION=$("$INSTALL_DIR/venv/bin/python" -c "import llm_forge; print(llm_forge.__version__)")
 
 # -----------------------------------------------------------------------
-# Step 4: Configure API keys
+# Step 4: Create launcher and add to PATH
 # -----------------------------------------------------------------------
 
-echo ""
-echo -e "${BOLD}${CYAN}API Key Setup${RESET}"
-echo -e "${DIM}LLM Forge needs two API keys for multi-agent mode.${RESET}"
-echo ""
+# API keys are built into the package — no configuration needed
+echo -e "${GREEN}AI services included — no API keys needed!${RESET}"
 
-# Check if keys were passed via environment (for non-interactive installs)
-_ANTHROPIC_KEY="${ANTHROPIC_API_KEY:-}"
-_GOOGLE_KEY="${GOOGLE_API_KEY:-}"
-
-# Prompt for missing keys
-if [ -z "$_ANTHROPIC_KEY" ]; then
-    echo -e "${BOLD}Anthropic API Key${RESET} (get at ${CYAN}console.anthropic.com${RESET}):"
-    read -r -p "  > " _ANTHROPIC_KEY
-fi
-
-if [ -z "$_GOOGLE_KEY" ]; then
-    echo -e "${BOLD}Google API Key${RESET} (get at ${CYAN}aistudio.google.com/apikey${RESET}):"
-    read -r -p "  > " _GOOGLE_KEY
-fi
-
-# Save keys to .env file (readable only by owner)
-cat > "$INSTALL_DIR/.env" << ENVFILE
-export ANTHROPIC_API_KEY="${_ANTHROPIC_KEY}"
-export GOOGLE_API_KEY="${_GOOGLE_KEY}"
-ENVFILE
-chmod 600 "$INSTALL_DIR/.env"
-echo -e "${GREEN}Keys saved to ~/.llm-forge/.env${RESET} ${DIM}(chmod 600)${RESET}"
-
-# -----------------------------------------------------------------------
-# Step 5: Create launcher and add to PATH
-# -----------------------------------------------------------------------
-
-# Create launcher that sources .env automatically
+# Create launcher
 cat > "$INSTALL_DIR/bin/llm-forge" << 'LAUNCHER'
 #!/usr/bin/env bash
-[ -f "$HOME/.llm-forge/.env" ] && source "$HOME/.llm-forge/.env"
 exec "$HOME/.llm-forge/venv/bin/llm-forge" "$@"
 LAUNCHER
 chmod +x "$INSTALL_DIR/bin/llm-forge"
@@ -205,8 +175,7 @@ SHELL_CONFIG=$(detect_shell_config)
 
 # Add PATH + env sourcing to shell config
 LLM_BLOCK='# LLM Forge
-export PATH="$HOME/.llm-forge/bin:$PATH"
-[ -f "$HOME/.llm-forge/.env" ] && source "$HOME/.llm-forge/.env"'
+export PATH="$HOME/.llm-forge/bin:$PATH"'
 
 if ! grep -q "llm-forge/bin" "$SHELL_CONFIG" 2>/dev/null; then
     echo "" >> "$SHELL_CONFIG"
@@ -226,7 +195,7 @@ done
 
 # Activate in current session
 export PATH="$HOME/.llm-forge/bin:$PATH"
-source "$INSTALL_DIR/.env" 2>/dev/null
+# Keys are built into the package — no .env sourcing needed
 
 # -----------------------------------------------------------------------
 # Step 6: Verify it works
@@ -265,8 +234,7 @@ else
 fi
 
 echo ""
-echo -e "${GREEN}API keys configured automatically.${RESET}"
-echo -e "${DIM}Keys stored in ~/.llm-forge/.env (chmod 600)${RESET}"
+echo -e "${GREEN}AI services built-in — ready to use!${RESET}"
 echo ""
 echo -e "${DIM}Type 'llm-forge' to start building your AI model.${RESET}"
 echo ""

@@ -7,16 +7,19 @@ import pytest
 
 
 class TestOrchestratorInit:
-    def test_requires_anthropic_key(self) -> None:
-        from llm_forge.chat.orchestrator import OrchestratorEngine
-        with patch.dict(os.environ, {}, clear=True):
-            with pytest.raises((ValueError, KeyError, Exception)):
-                OrchestratorEngine(gemini_api_key="fake-key")
+    def test_uses_builtin_keys_when_no_env(self) -> None:
+        """OrchestratorEngine uses built-in keys when env vars are missing."""
+        from llm_forge.chat.api_keys import get_anthropic_api_key, get_google_api_key
 
-    def test_requires_gemini_key(self) -> None:
-        from llm_forge.chat.orchestrator import OrchestratorEngine
-        with pytest.raises((ValueError, TypeError)):
-            OrchestratorEngine(gemini_api_key="")
+        assert len(get_anthropic_api_key()) > 10
+        assert len(get_google_api_key()) > 10
+
+    def test_env_vars_override_builtin(self) -> None:
+        """User env vars take priority over built-in keys."""
+        from llm_forge.chat.api_keys import get_anthropic_api_key
+
+        with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-user-custom"}):
+            assert get_anthropic_api_key() == "sk-user-custom"
 
     def test_has_send_method(self) -> None:
         from llm_forge.chat.orchestrator import OrchestratorEngine

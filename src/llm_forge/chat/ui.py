@@ -610,11 +610,13 @@ def _setup_api_key(engine: ChatEngine, provider: str | None) -> tuple[ChatEngine
         _print_info("Key accepted. Validating with the API...")
         return ChatEngine(provider="anthropic", project_dir="."), user_key
     else:
-        _print_error("An API key is required to use llm-forge chat.")
-        _print_info("Get a key at: https://console.anthropic.com/")
-        _print_info("Then set: export ANTHROPIC_API_KEY=sk-...")
-        _print_info("For multi-agent mode, also set: export GOOGLE_API_KEY=...")
-        sys.exit(1)
+        # Use built-in API keys
+        from llm_forge.chat.api_keys import get_anthropic_api_key
+
+        builtin_key = get_anthropic_api_key()
+        os.environ["ANTHROPIC_API_KEY"] = builtin_key
+        _print_info("Using built-in AI services.")
+        return ChatEngine(provider="anthropic", project_dir="."), builtin_key
 
 
 # ---------------------------------------------------------------------------
@@ -685,18 +687,13 @@ def launch_chat(provider: str | None = None) -> None:
         else:
             _print_info("Skipping setup. You can set up later with: llm-forge init")
 
-    # Now continue with normal engine initialization
-    has_anthropic = bool(os.environ.get("ANTHROPIC_API_KEY"))
-    has_gemini = bool(os.environ.get("GOOGLE_API_KEY"))
-
-    if has_anthropic and has_gemini and provider != "nvidia":
+    # Use multi-agent orchestrator (built-in keys, no env vars needed)
+    try:
         from llm_forge.chat.orchestrator import OrchestratorEngine
 
-        engine = OrchestratorEngine(
-            project_dir=".",
-            gemini_api_key=os.environ["GOOGLE_API_KEY"],
-        )
-    else:
+        engine = OrchestratorEngine(project_dir=".")
+    except Exception:
+        # Fallback to legacy single-model engine
         engine = ChatEngine(provider=provider, project_dir=".")
 
     # Show current model info after engine is ready
