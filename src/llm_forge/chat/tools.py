@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import platform
 import re
 import subprocess
@@ -1147,12 +1148,17 @@ def _start_training(config_path: str, verbose: bool = True) -> str:
 
     try:
         # --- Gap 3: Capture stderr separately for error reporting ----------
+        # Ensure PYTHONPATH includes src/ for iCloud paths where .pth files fail
+        env = os.environ.copy()
+        src_dir = str(Path(__file__).resolve().parent.parent.parent)
+        env["PYTHONPATH"] = src_dir + os.pathsep + env.get("PYTHONPATH", "")
         process = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
             cwd=str(Path.cwd()),
+            env=env,
         )
 
         # Read first few lines to confirm it started

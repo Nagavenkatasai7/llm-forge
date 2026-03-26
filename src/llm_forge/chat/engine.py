@@ -30,10 +30,8 @@ def _get_provider() -> str:
         return "anthropic"
     if os.environ.get("OPENAI_API_KEY"):
         return "openai"
-    if os.environ.get("NVIDIA_API_KEY"):
-        return "nvidia"
-    # Default: use embedded NVIDIA key (free for everyone)
-    return "nvidia"
+    # Default to anthropic — user must set ANTHROPIC_API_KEY
+    return "anthropic"
 
 
 def _get_anthropic_client():
@@ -279,13 +277,6 @@ class ChatEngine:
         - Supports streaming via on_text(chunk) callback
         - Supports Esc interruption via interrupt_check() callback
         """
-        from llm_forge.chat.context_detector import classify_and_wrap_input
-
-        user_input = classify_and_wrap_input(
-            user_input,
-            recent_tool_calls=self._recent_tool_names,
-            conversation_length=len(self.messages),
-        )
         self.messages.append({"role": "user", "content": user_input})
         self._interrupted = False
 

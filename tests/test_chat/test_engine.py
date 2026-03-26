@@ -23,10 +23,10 @@ class TestEngineInit:
     """Test ChatEngine construction and provider detection."""
 
     def test_engine_init_no_api_key(self, tmp_path: Path) -> None:
-        """ChatEngine with no key defaults to 'nvidia' (free embedded key)."""
+        """ChatEngine with no key defaults to 'anthropic'."""
         with patch.dict("os.environ", {}, clear=True):
             engine = ChatEngine(project_dir=str(tmp_path))
-        assert engine.provider == "nvidia"
+        assert engine.provider == "anthropic"
 
     def test_engine_init_anthropic_key(self, tmp_path: Path) -> None:
         """ChatEngine detects anthropic provider when ANTHROPIC_API_KEY is set."""

@@ -1,0 +1,36 @@
+model:
+  name: HuggingFaceTB/SmolLM2-135M
+  max_seq_length: 512
+  attn_implementation: sdpa
+  torch_dtype: bf16
+lora:
+  r: 8
+  alpha: 16
+  dropout: 0.05
+  target_modules:
+  - q_proj
+  - v_proj
+data:
+  train_path: ./examples/data/sample_train.jsonl
+  format: alpaca
+  test_size: 0.2
+training:
+  mode: lora
+  output_dir: ./outputs/quickstart-tiny/
+  num_epochs: 2
+  per_device_train_batch_size: 2
+  gradient_accumulation_steps: 1
+  learning_rate: 0.0003
+  lr_scheduler_type: cosine
+  warmup_ratio: 0.1
+  bf16: true
+  save_steps: 100
+  logging_steps: 1
+  report_to:
+  - none
+  assistant_only_loss: false
+evaluation:
+  enabled: false
+serving:
+  export_format: safetensors
+  merge_adapter: true

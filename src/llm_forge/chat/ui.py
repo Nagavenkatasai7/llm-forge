@@ -499,21 +499,52 @@ _input_session = None
 
 
 def _get_input() -> str:
-    """Get user input with prompt_toolkit (or fallback to plain input).
-
-    prompt_toolkit provides bracketed-paste support, slash-command
-    completion on Tab, input history via Up/Down, and Esc+Enter for
-    explicit newlines.
-    """
+    """Get user input with prompt_toolkit (or fallback to plain input)."""
     global _input_session  # noqa: PLW0603
     if _input_session is None:
-        from llm_forge.chat.input_handler import create_input_session
+        try:
+            from prompt_toolkit import PromptSession
+            from prompt_toolkit.completion import WordCompleter
+            from prompt_toolkit.history import InMemoryHistory
+            from prompt_toolkit.key_binding import KeyBindings
 
-        _input_session = create_input_session()
+            _slash_cmds = [
+                "/help", "/status", "/hardware", "/memory", "/clear",
+                "/config", "/models", "/auto", "/quit", "/version",
+                "/model", "/paste", "/test",
+            ]
+            bindings = KeyBindings()
 
-    from llm_forge.chat.input_handler import get_user_input
+            @bindings.add("escape", "enter")
+            def _insert_newline(event):
+                event.current_buffer.insert_text("\n")
 
-    return get_user_input(session=_input_session)
+            _input_session = PromptSession(
+                history=InMemoryHistory(),
+                completer=WordCompleter(_slash_cmds, sentence=True),
+                complete_while_typing=False,
+                key_bindings=bindings,
+            )
+        except ImportError:
+            pass  # _input_session stays None, fallback to input()
+
+    if _input_session is not None:
+        try:
+            from prompt_toolkit.formatted_text import HTML
+
+            return _input_session.prompt(HTML("<cyan><b>&gt; </b></cyan>"))
+        except (EOFError, KeyboardInterrupt):
+            raise
+        except Exception:
+            pass
+
+    try:
+        from rich.console import Console
+
+        Console().print("[bold cyan]>[/bold cyan] ", end="")
+        return input()
+    except ImportError:
+        return input("> ")
 
 
 # ---------------------------------------------------------------------------
@@ -579,11 +610,11 @@ def _setup_api_key(engine: ChatEngine, provider: str | None) -> tuple[ChatEngine
         _print_info("Key accepted. Validating with the API...")
         return ChatEngine(provider="anthropic", project_dir="."), user_key
     else:
-        _print_info("No API key? No problem. Launching the free guided wizard instead.")
-        from llm_forge.chat.wizard_fallback import launch_wizard_fallback
-
-        launch_wizard_fallback()
-        sys.exit(0)
+        _print_error("An API key is required to use llm-forge chat.")
+        _print_info("Get a key at: https://console.anthropic.com/")
+        _print_info("Then set: export ANTHROPIC_API_KEY=sk-...")
+        _print_info("For multi-agent mode, also set: export GOOGLE_API_KEY=...")
+        sys.exit(1)
 
 
 # ---------------------------------------------------------------------------
@@ -655,7 +686,18 @@ def launch_chat(provider: str | None = None) -> None:
             _print_info("Skipping setup. You can set up later with: llm-forge init")
 
     # Now continue with normal engine initialization
-    engine = ChatEngine(provider=provider, project_dir=".")
+    has_anthropic = bool(os.environ.get("ANTHROPIC_API_KEY"))
+    has_gemini = bool(os.environ.get("GOOGLE_API_KEY"))
+
+    if has_anthropic and has_gemini and provider != "nvidia":
+        from llm_forge.chat.orchestrator import OrchestratorEngine
+
+        engine = OrchestratorEngine(
+            project_dir=".",
+            gemini_api_key=os.environ["GOOGLE_API_KEY"],
+        )
+    else:
+        engine = ChatEngine(provider=provider, project_dir=".")
 
     # Show current model info after engine is ready
     _print_model_info(engine)
@@ -716,10 +758,7 @@ def launch_chat(provider: str | None = None) -> None:
                 _print_success("Installed! Reconnecting...")
                 engine = ChatEngine(provider="anthropic", project_dir=".")
             else:
-                _print_info("Launching free wizard instead.")
-                from llm_forge.chat.wizard_fallback import launch_wizard_fallback
-
-                launch_wizard_fallback()
+                _print_error("API key required. Set ANTHROPIC_API_KEY and try again.")
                 return
 
     # Wire tool-action display for the initial greeting and all future calls
@@ -748,10 +787,7 @@ def launch_chat(provider: str | None = None) -> None:
         if api_key and api_key in err_msg:
             err_msg = err_msg.replace(api_key, "sk-***REDACTED***")
         _print_error(f"Error connecting to API: {err_msg}")
-        _print_info("Falling back to free wizard. You can try again later with an API key.")
-        from llm_forge.chat.wizard_fallback import launch_wizard_fallback
-
-        launch_wizard_fallback()
+        _print_info("Check your API key and try again.")
         return
 
     # The greeting succeeded, so the API key is valid -- persist it now.
