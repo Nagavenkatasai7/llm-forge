@@ -109,9 +109,9 @@ mkdir -p "$INSTALL_DIR/bin"
 # Step 3: Install llm-forge-new
 # -----------------------------------------------------------------------
 
-echo -e "${DIM}Installing LLM Forge from PyPI...${RESET}"
+echo -e "${DIM}Installing LLM Forge v3.0.0 (multi-agent orchestration)...${RESET}"
 "$INSTALL_DIR/venv/bin/pip" install --upgrade pip -q 2>/dev/null
-"$INSTALL_DIR/venv/bin/pip" install "llm-forge-new[chat]" -q
+"$INSTALL_DIR/venv/bin/pip" install "llm-forge-new[chat] @ git+https://github.com/Nagavenkatasai7/llm-forge.git@main" -q
 
 if ! "$INSTALL_DIR/venv/bin/python" -c "import llm_forge" 2>/dev/null; then
     echo -e "${RED}Installation failed. Please report:${RESET}"
@@ -230,5 +230,9 @@ else
 fi
 
 echo ""
-echo -e "${DIM}Go to any folder and type 'llm-forge' to start building your AI model.${RESET}"
+echo -e "${BOLD}API Keys Required:${RESET}"
+echo -e "  ${CYAN}export ANTHROPIC_API_KEY=sk-ant-...${RESET}  (get at console.anthropic.com)"
+echo -e "  ${CYAN}export GOOGLE_API_KEY=AIza...${RESET}       (get at aistudio.google.com/apikey)"
+echo ""
+echo -e "${DIM}Then type 'llm-forge' to start building your AI model.${RESET}"
 echo ""
