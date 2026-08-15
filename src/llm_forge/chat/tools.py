@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import math
 import os
 import platform
@@ -18,6 +19,8 @@ from llm_forge.chat.execution import (
     execute_execution_tool,
 )
 from llm_forge.chat.training_monitor import TrainingMonitor
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Active training monitor (module-level singleton)

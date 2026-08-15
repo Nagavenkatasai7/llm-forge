@@ -27,7 +27,14 @@ from textual.widgets import Footer, Header, Input, Markdown, Static
 
 
 class StatusBar(Static):
-    """Bottom status bar showing model, provider, and memory count."""
+    """Persistent status line: model, hardware budget, memory, activity.
+
+    The hardware budget earns its place here rather than being something the
+    user has to ask for. Every decision in a training session is bounded by it,
+    and on unified-memory machines the usable figure differs sharply from the
+    installed total -- keeping it on screen stops both the user and the agent
+    from reasoning against the wrong number.
+    """
 
     DEFAULT_CSS = """
     StatusBar {
@@ -39,20 +46,34 @@ class StatusBar(Static):
     }
     """
 
+    SEPARATOR = "  ·  "
+
     def __init__(self, **kwargs) -> None:
         super().__init__(**kwargs)
         self.model_name: str = "unknown"
         self.provider: str = "unknown"
         self.memory_count: int = 0
         self.session_count: int = 0
+        self.hardware: str = ""
+        self.activity: str = ""
 
     def render(self) -> str:  # type: ignore[override]
-        return (
-            f" Model: {self.model_name} | "
-            f"Provider: {self.provider} | "
-            f"Memory: {self.memory_count} insights | "
-            f"/ help | Esc interrupt | Ctrl+C quit"
-        )
+        segments: list[str] = [f"[bold]{self.model_name}[/bold]"]
+
+        if self.hardware:
+            segments.append(self.hardware)
+
+        if self.memory_count or self.session_count:
+            segments.append(
+                f"{self.memory_count} insights / {self.session_count} sessions"
+            )
+
+        if self.activity:
+            segments.append(f"[yellow]{self.activity}[/yellow]")
+        else:
+            segments.append("[dim]/ commands · esc interrupt · ^C quit[/dim]")
+
+        return " " + self.SEPARATOR.join(segments)
 
     def update_info(
         self,
@@ -60,15 +81,55 @@ class StatusBar(Static):
         provider: str = "",
         memory: int = 0,
         sessions: int = 0,
+        hardware: str = "",
     ) -> None:
         """Refresh the status bar with new values."""
         if model:
             self.model_name = model
         if provider:
             self.provider = provider
+        if hardware:
+            self.hardware = hardware
         self.memory_count = memory
         self.session_count = sessions
         self.refresh()
+
+    def set_activity(self, activity: str = "") -> None:
+        """Show what the agent is doing right now, or clear it when idle."""
+        self.activity = activity
+        self.refresh()
+
+
+def describe_hardware() -> str:
+    """One-line hardware summary for the status bar.
+
+    Reports *usable* memory, not installed: on Apple Silicon the two differ by
+    the OS reserve, and sizing a run against the installed total is how a run
+    ends up swapping.
+    """
+    try:
+        import json
+
+        from llm_forge.chat.tools import _detect_hardware
+
+        info = json.loads(_detect_hardware())
+    except Exception:
+        return ""
+
+    backend = info.get("backend", "cpu")
+    usable = info.get("usable_memory_gb")
+
+    if backend == "mps":
+        chip = info.get("gpu_name", "Apple Silicon")
+        total = info.get("unified_memory_gb")
+        return f"{chip} · {usable:g}/{total:g} GB usable (mps)"
+
+    if backend == "cuda":
+        gpus = info.get("gpus") or [{}]
+        name = gpus[0].get("name", "GPU")
+        return f"{name} · {usable:g} GB (cuda)"
+
+    return "CPU only · no GPU detected"
 
 
 # ---------------------------------------------------------------------------
@@ -128,6 +189,7 @@ class LLMForgeApp(App):
     def __init__(self, engine=None, **kwargs) -> None:
         super().__init__(**kwargs)
         self.engine = engine
+        self._hardware_summary: str = ""
 
     # -- Compose the widget tree ----------------------------------------
 
@@ -140,7 +202,7 @@ class LLMForgeApp(App):
                 classes="system-message",
             )
         yield Input(
-            placeholder="Type your message... (/ for commands, Esc to interrupt)",
+            placeholder="Describe the model you want to build...  (/ commands, esc interrupt)",
             id="user-input",
         )
         yield StatusBar()
@@ -180,11 +242,17 @@ class LLMForgeApp(App):
         except Exception:
             pass
 
+        # Hardware does not change mid-session, so detect once and cache --
+        # _detect_hardware shells out to sysctl and imports torch.
+        if not self._hardware_summary:
+            self._hardware_summary = describe_hardware()
+
         status.update_info(
             model=model_name,
             provider=provider.upper(),
             memory=memory_count,
             sessions=session_count,
+            hardware=self._hardware_summary,
         )
 
     # -- Message helpers -------------------------------------------------
@@ -216,8 +284,17 @@ class LLMForgeApp(App):
     def _add_system_message(self, text: str) -> None:
         self._add_message(f"  [dim]{text}[/dim]", "system-message")
 
-    def _add_thinking(self) -> None:
-        self._add_system_message("thinking...")
+    def _set_activity(self, activity: str = "") -> None:
+        """Drive the status-bar activity indicator.
+
+        Thinking blocks default to omitted content, so without an indicator the
+        UI shows nothing at all while the model reasons -- which reads as a
+        hang rather than as work in progress.
+        """
+        try:
+            self.query_one(StatusBar).set_activity(activity)
+        except Exception:
+            pass
 
     # -- Input handling --------------------------------------------------
 
@@ -282,6 +359,7 @@ class LLMForgeApp(App):
 
             detail = _format_tool_detail(name, data)
             self.call_from_thread(self._add_tool_message, detail)
+            self.call_from_thread(self._set_activity, detail)
 
         def on_tool_end(name, data, result):
             from llm_forge.chat.ui import _summarize_tool_result
@@ -295,7 +373,7 @@ class LLMForgeApp(App):
         self.engine.on_tool_start = on_tool_start
         self.engine.on_tool_end = on_tool_end
 
-        self.call_from_thread(self._add_thinking)
+        self.call_from_thread(self._set_activity, "thinking")
 
         try:
             response = self.engine.send(text)
@@ -305,6 +383,7 @@ class LLMForgeApp(App):
         finally:
             self.engine.on_tool_start = prev_start
             self.engine.on_tool_end = prev_end
+            self.call_from_thread(self._set_activity, "")
             self.call_from_thread(self._update_status)
 
     @work(thread=True)
@@ -318,6 +397,7 @@ class LLMForgeApp(App):
 
             detail = _format_tool_detail(name, data)
             self.call_from_thread(self._add_tool_message, detail)
+            self.call_from_thread(self._set_activity, detail)
 
         def on_tool_end(name, data, result):
             from llm_forge.chat.ui import _summarize_tool_result
@@ -329,7 +409,7 @@ class LLMForgeApp(App):
         self.engine.on_tool_start = on_tool_start
         self.engine.on_tool_end = on_tool_end
 
-        self.call_from_thread(self._add_thinking)
+        self.call_from_thread(self._set_activity, "thinking")
 
         try:
             greeting = self.engine.send(
@@ -343,6 +423,7 @@ class LLMForgeApp(App):
         except Exception as e:
             self.call_from_thread(self._add_system_message, f"Error: {e}")
         finally:
+            self.call_from_thread(self._set_activity, "")
             self.call_from_thread(self._update_status)
 
     # -- Actions ---------------------------------------------------------
@@ -350,6 +431,9 @@ class LLMForgeApp(App):
     def action_interrupt(self) -> None:
         """Cancel any running background workers."""
         self.workers.cancel_all()
+        # The cancelled worker never reaches its finally block, so the status
+        # bar would otherwise stay stuck showing the abandoned activity.
+        self._set_activity("")
         self._add_system_message("Interrupted -- type your next instruction")
 
     def action_clear_chat(self) -> None:

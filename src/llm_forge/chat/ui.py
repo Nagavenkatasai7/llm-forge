@@ -68,6 +68,8 @@ _TOOL_LABELS: dict[str, str] = {
     "deploy_to_ollama": "Deploy to Ollama",
     "deploy_to_huggingface": "Deploy to HuggingFace",
     "search_huggingface": "Search HuggingFace",
+    "web_search": "Search the web",
+    "read_url": "Read page",
     "download_model": "Download model",
     "save_memory": "Save memory",
     "recall_memory": "Recall memory",
@@ -114,6 +116,14 @@ def _format_tool_detail(tool_name: str, input_data: dict | None) -> str:
         return f"Save memory [{cat}]: {content}"
     elif tool_name == "recall_memory":
         return f"Recall memory: {input_data.get('query', '?')}"
+    elif tool_name == "web_search":
+        query = input_data.get("query", "?")
+        if len(query) > 60:
+            query = query[:57] + "..."
+        return f"Search the web: {query}"
+    elif tool_name == "search_huggingface":
+        kind = input_data.get("search_type", "models")
+        return f"Search HuggingFace {kind}: {input_data.get('query', '?')}"
     elif tool_name == "install_package":
         return f"Install: {input_data.get('package_name', '?')}"
     elif tool_name == "fetch_url":
@@ -159,10 +169,33 @@ def _summarize_tool_result(tool_name: str, result_json: str) -> str | None:
 
     if tool_name == "detect_hardware":
         gpu = data.get("gpu_type", "no GPU")
-        ram = data.get("ram_total_gb", "?")
         rec = data.get("recommendation", {})
         mode = rec.get("mode", "?") if isinstance(rec, dict) else "?"
-        return f"{gpu}, {ram} GB RAM -> {mode} recommended"
+        # Report usable memory, not installed -- they differ on unified memory,
+        # and the usable figure is the one every later decision is bounded by.
+        usable = data.get("usable_memory_gb")
+        if usable is not None:
+            return f"{gpu}, {usable:g} GB usable -> {mode}"
+        return f"{gpu}, {data.get('ram_total_gb', '?')} GB RAM -> {mode} recommended"
+    elif tool_name == "web_search":
+        sources = data.get("sources") or []
+        if data.get("error"):
+            return f"search failed: {str(data['error'])[:60]}"
+        return f"{len(sources)} source(s)"
+    elif tool_name == "search_huggingface":
+        results = data.get("results") or []
+        if data.get("error"):
+            return f"error: {str(data['error'])[:60]}"
+        if not results:
+            return "no matches"
+        top = results[0]
+        if data.get("type") == "datasets":
+            gt = (top.get("ground_truth") or {}).get("verdict", "?")
+            return f"{len(results)} found; top: {top.get('id')} (ground truth: {gt})"
+        fit = (top.get("fit") or {}).get("recommended_method")
+        params = top.get("parameters_human", "?")
+        suffix = f", fits via {fit}" if fit else ""
+        return f"{len(results)} found; top: {top.get('id')} ({params}{suffix})"
     elif tool_name == "scan_data":
         count = data.get("sample_count", "?")
         fmt = data.get("detected_format", "?")

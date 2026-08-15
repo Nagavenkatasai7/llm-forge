@@ -89,14 +89,15 @@ async def test_chat_view_has_welcome_message():
 
 
 def test_status_bar_render_defaults():
-    """StatusBar.render() returns a string with default values."""
+    """StatusBar.render() returns a usable line before any info arrives."""
     from llm_forge.chat.tui import StatusBar
 
     bar = StatusBar()
     rendered = bar.render()
-    assert "Model:" in rendered
-    assert "Provider:" in rendered
-    assert "Memory:" in rendered
+    # Model slot is always present; hardware and memory segments are omitted
+    # until they have real values rather than rendering as "unknown".
+    assert "unknown" in rendered
+    assert "esc interrupt" in rendered
 
 
 def test_status_bar_update_info():
