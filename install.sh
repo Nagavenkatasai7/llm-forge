@@ -113,9 +113,25 @@ mkdir -p "$INSTALL_DIR/bin"
 # Step 3: Install llm-forge-new
 # -----------------------------------------------------------------------
 
-echo -e "${DIM}Installing LLM Forge v3.0.0 (multi-agent orchestration)...${RESET}"
+# Where to install from. Defaults to the published main branch, but can be
+# pointed at a branch or a local clone -- useful for testing a fix before it is
+# merged, which otherwise requires pushing to main to try it at all.
+#
+#   LLM_FORGE_REF=my-branch    curl ... | bash     # install a branch
+#   LLM_FORGE_SOURCE=~/my/repo bash install.sh     # install a local clone
+LLM_FORGE_REF="${LLM_FORGE_REF:-main}"
+
+if [ -n "$LLM_FORGE_SOURCE" ]; then
+    SOURCE_DESC="local clone at $LLM_FORGE_SOURCE"
+    PIP_TARGET="$LLM_FORGE_SOURCE[chat]"
+else
+    SOURCE_DESC="github @ $LLM_FORGE_REF"
+    PIP_TARGET="llm-forge-new[chat] @ git+https://github.com/Nagavenkatasai7/llm-forge.git@$LLM_FORGE_REF"
+fi
+
+echo -e "${DIM}Installing LLM Forge from $SOURCE_DESC ...${RESET}"
 "$INSTALL_DIR/venv/bin/pip" install --upgrade pip -q 2>/dev/null
-"$INSTALL_DIR/venv/bin/pip" install "llm-forge-new[chat] @ git+https://github.com/Nagavenkatasai7/llm-forge.git@main" -q
+"$INSTALL_DIR/venv/bin/pip" install "$PIP_TARGET" -q
 
 if ! "$INSTALL_DIR/venv/bin/python" -c "import llm_forge" 2>/dev/null; then
     echo -e "${RED}Installation failed. Please report:${RESET}"

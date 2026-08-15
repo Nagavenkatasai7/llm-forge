@@ -129,6 +129,34 @@ cd llm-forge
 pip install -e ".[all]"
 ```
 
+The installer takes two environment variables, so you can try a branch or a
+local checkout without merging it to `main` first:
+
+```bash
+# Install a branch
+LLM_FORGE_REF=my-branch bash install.sh
+
+# Install a local clone, exactly as the installer would deploy it
+LLM_FORGE_SOURCE=~/path/to/llm-forge bash install.sh
+```
+
+## Two interfaces
+
+```bash
+llm-forge          # scrolling transcript (default, maximum compatibility)
+llm-forge --tui    # full-screen app with a persistent status line
+```
+
+The `--tui` mode keeps your model, hardware budget, and memory state on screen
+at all times, and shows which tool is running as it runs:
+
+```
+ opus-5  ·  Apple M4 Pro · 18/24 GB usable (mps)  ·  12 insights / 3 sessions
+```
+
+It needs an API key. Plain `llm-forge` falls back to the offline wizard without
+one.
+
 ## How It Works
 
 ```
