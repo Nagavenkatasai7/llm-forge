@@ -16,6 +16,7 @@ class TestRunEvaluation:
 
 
 class TestTestModel:
+    @patch.dict("os.environ", {"NVIDIA_API_KEY": "nvapi-test-fake-key"})
     @patch("openai.OpenAI")
     def test_test_model_returns_json(self, mock_openai_cls) -> None:
         """test_model returns valid JSON (mocked to avoid network)."""
@@ -36,6 +37,7 @@ class TestTestModel:
 
 
 class TestCompareModels:
+    @patch.dict("os.environ", {"NVIDIA_API_KEY": "nvapi-test-fake-key"})
     @patch("openai.OpenAI")
     def test_compare_models_returns_json(self, mock_openai_cls) -> None:
         """compare_models returns valid JSON (mocked)."""

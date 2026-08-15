@@ -14,6 +14,18 @@ import yaml
 
 from llm_forge.chat.tools import execute_tool
 
+
+@pytest.fixture()
+def nvidia_key(monkeypatch):
+    """Supply an NVIDIA key for tools that call NVIDIA NIM.
+
+    These tools used to work with no key because the package embedded a
+    project-owned one. That key was published and has been removed, so they
+    now legitimately require the user's own -- and the tests have to say so.
+    """
+    monkeypatch.setenv("NVIDIA_API_KEY", "nvapi-test-fake-key")
+
+
 # ===================================================================
 # Hardware detection
 # ===================================================================
@@ -275,7 +287,7 @@ class TestGenerateTrainingData:
         resp.choices = [choice]
         return resp
 
-    def test_generate_training_data_basic(self, tmp_path: Path) -> None:
+    def test_generate_training_data_basic(self, nvidia_key, tmp_path: Path) -> None:
         """Generates samples and writes JSONL to the output path."""
         from unittest.mock import MagicMock, patch
 
@@ -312,7 +324,7 @@ class TestGenerateTrainingData:
         assert len(lines) == 3
         assert lines[0]["instruction"] == "Q0?"
 
-    def test_generate_training_data_with_examples(self, tmp_path: Path) -> None:
+    def test_generate_training_data_with_examples(self, nvidia_key, tmp_path: Path) -> None:
         """Examples text is included in the prompt sent to the model."""
         from unittest.mock import MagicMock, patch
 
@@ -339,7 +351,7 @@ class TestGenerateTrainingData:
         prompt_text = call_args.kwargs["messages"][0]["content"]
         assert "sauteing" in prompt_text
 
-    def test_generate_training_data_creates_parent_dirs(self, tmp_path: Path) -> None:
+    def test_generate_training_data_creates_parent_dirs(self, nvidia_key, tmp_path: Path) -> None:
         """Output path with nested directories is created automatically."""
         from unittest.mock import MagicMock, patch
 
@@ -359,7 +371,7 @@ class TestGenerateTrainingData:
         assert result["status"] == "ok"
         assert Path(output_path).exists()
 
-    def test_generate_training_data_api_error(self, tmp_path: Path) -> None:
+    def test_generate_training_data_api_error(self, nvidia_key, tmp_path: Path) -> None:
         """Returns error status when the NVIDIA API call fails."""
         from unittest.mock import MagicMock, patch
 
@@ -382,7 +394,7 @@ class TestGenerateTrainingData:
         assert "API timeout" in result["error"]
         assert result["generated_so_far"] == 0
 
-    def test_generate_training_data_skips_malformed_json(self, tmp_path: Path) -> None:
+    def test_generate_training_data_skips_malformed_json(self, nvidia_key, tmp_path: Path) -> None:
         """Malformed JSON lines in the model response are silently skipped."""
         from unittest.mock import MagicMock, patch
 
@@ -410,7 +422,7 @@ class TestGenerateTrainingData:
         # Only 2 valid JSON lines out of 3
         assert result["samples_generated"] == 2
 
-    def test_generate_training_data_default_output_path(self) -> None:
+    def test_generate_training_data_default_output_path(self, nvidia_key) -> None:
         """When no output_path is given, defaults to data/synthetic_train.jsonl."""
         from unittest.mock import MagicMock, patch
 
@@ -451,7 +463,7 @@ class TestEvaluateWithLlm:
         resp.choices = [choice]
         return resp
 
-    def test_evaluate_with_llm_basic(self) -> None:
+    def test_evaluate_with_llm_basic(self, nvidia_key) -> None:
         """Evaluates a single Q&A pair and returns scores."""
         from unittest.mock import MagicMock, patch
 
@@ -482,7 +494,7 @@ class TestEvaluateWithLlm:
         assert len(result["evaluations"]) == 1
         assert result["evaluations"][0]["overall"] == 4.3
 
-    def test_evaluate_with_llm_multiple(self) -> None:
+    def test_evaluate_with_llm_multiple(self, nvidia_key) -> None:
         """Evaluates multiple Q&A pairs and averages scores."""
         from unittest.mock import MagicMock, patch
 
@@ -522,7 +534,7 @@ class TestEvaluateWithLlm:
         assert result["samples_evaluated"] == 2
         assert result["average_score"] == 4.0  # (5.0 + 3.0) / 2
 
-    def test_evaluate_with_llm_custom_criteria(self) -> None:
+    def test_evaluate_with_llm_custom_criteria(self, nvidia_key) -> None:
         """Custom criteria string is passed to the judge prompt."""
         from unittest.mock import MagicMock, patch
 
@@ -555,7 +567,7 @@ class TestEvaluateWithLlm:
         prompt_text = call_args.kwargs["messages"][0]["content"]
         assert "clarity, depth" in prompt_text
 
-    def test_evaluate_with_llm_api_error(self) -> None:
+    def test_evaluate_with_llm_api_error(self, nvidia_key) -> None:
         """API error for one question produces error entry but does not crash."""
         from unittest.mock import MagicMock, patch
 
@@ -579,7 +591,7 @@ class TestEvaluateWithLlm:
         assert "error" in result["evaluations"][0]
         assert "Rate limited" in result["evaluations"][0]["error"]
 
-    def test_evaluate_with_llm_unparseable_response(self) -> None:
+    def test_evaluate_with_llm_unparseable_response(self, nvidia_key) -> None:
         """When judge returns non-JSON, an error entry is recorded."""
         from unittest.mock import MagicMock, patch
 
@@ -603,7 +615,7 @@ class TestEvaluateWithLlm:
         assert result["samples_evaluated"] == 1
         assert "error" in result["evaluations"][0]
 
-    def test_evaluate_with_llm_question_truncation(self) -> None:
+    def test_evaluate_with_llm_question_truncation(self, nvidia_key) -> None:
         """Long questions are truncated to 100 chars in the evaluation result."""
         from unittest.mock import MagicMock, patch
 
@@ -655,7 +667,7 @@ class TestTestModel:
         resp.usage = usage
         return resp
 
-    def test_test_model_basic(self) -> None:
+    def test_test_model_basic(self, nvidia_key) -> None:
         """Tests a single question and returns the model's answer."""
         from unittest.mock import MagicMock, patch
 
@@ -683,7 +695,7 @@ class TestTestModel:
         assert result["results"][0]["answer"] == "Python is a programming language."
         assert result["results"][0]["tokens_used"] == 50
 
-    def test_test_model_multiple_questions(self) -> None:
+    def test_test_model_multiple_questions(self, nvidia_key) -> None:
         """Tests multiple newline-separated questions."""
         from unittest.mock import MagicMock, patch
 
@@ -715,7 +727,7 @@ class TestTestModel:
         assert result["results"][1]["question"] == "What is ML?"
         assert result["results"][2]["question"] == "What is DL?"
 
-    def test_test_model_error_handling(self) -> None:
+    def test_test_model_error_handling(self, nvidia_key) -> None:
         """API error for a question produces an error entry, not a crash."""
         from unittest.mock import MagicMock, patch
 
@@ -763,7 +775,7 @@ class TestGenerateEmbeddings:
         resp.data = data
         return resp
 
-    def test_generate_embeddings_basic(self) -> None:
+    def test_generate_embeddings_basic(self, nvidia_key) -> None:
         """Embeds texts and returns previews with metadata."""
         from unittest.mock import MagicMock, patch
 
@@ -790,7 +802,7 @@ class TestGenerateEmbeddings:
         # Text preview should be truncated to 100 chars
         assert result["previews"][0]["text"] == "What is machine learning?"
 
-    def test_generate_embeddings_save_to_file(self, tmp_path: Path) -> None:
+    def test_generate_embeddings_save_to_file(self, nvidia_key, tmp_path: Path) -> None:
         """When output_path is provided, full embeddings are saved to JSON."""
         from unittest.mock import MagicMock, patch
 
@@ -825,7 +837,7 @@ class TestGenerateEmbeddings:
         assert saved[0]["text"] == "Hello world"
         assert len(saved[0]["embedding"]) == 512
 
-    def test_generate_embeddings_error(self) -> None:
+    def test_generate_embeddings_error(self, nvidia_key) -> None:
         """Returns error status when the NVIDIA embedding API call fails."""
         from unittest.mock import MagicMock, patch
 
@@ -863,7 +875,7 @@ class TestGenerateScript:
         resp.choices = [choice]
         return resp
 
-    def test_generate_script_basic(self, tmp_path: Path) -> None:
+    def test_generate_script_basic(self, nvidia_key, tmp_path: Path) -> None:
         """Generates a script and saves it to the output path."""
         from unittest.mock import MagicMock, patch
 
@@ -895,7 +907,7 @@ class TestGenerateScript:
         written = Path(output_path).read_text()
         assert "def main():" in written
 
-    def test_generate_script_extracts_code_block(self, tmp_path: Path) -> None:
+    def test_generate_script_extracts_code_block(self, nvidia_key, tmp_path: Path) -> None:
         """Extracts code from markdown ```python code blocks."""
         from unittest.mock import MagicMock, patch
 
@@ -929,7 +941,7 @@ class TestGenerateScript:
         assert "Here is the script" not in written
         assert "import sys" in written
 
-    def test_generate_script_with_input_output_files(self, tmp_path: Path) -> None:
+    def test_generate_script_with_input_output_files(self, nvidia_key, tmp_path: Path) -> None:
         """Input/output file names are passed to the prompt."""
         from unittest.mock import MagicMock, patch
 
@@ -958,7 +970,7 @@ class TestGenerateScript:
         assert "data.csv" in prompt_text
         assert "data.jsonl" in prompt_text
 
-    def test_generate_script_api_error(self, tmp_path: Path) -> None:
+    def test_generate_script_api_error(self, nvidia_key, tmp_path: Path) -> None:
         """Returns error status when the NVIDIA API call fails."""
         from unittest.mock import MagicMock, patch
 
@@ -999,7 +1011,7 @@ class TestCompareModels:
         resp.choices = [choice]
         return resp
 
-    def test_compare_models_basic(self) -> None:
+    def test_compare_models_basic(self, nvidia_key) -> None:
         """Compares two models on one question and returns a verdict."""
         from unittest.mock import MagicMock, patch
 
@@ -1033,7 +1045,7 @@ class TestCompareModels:
         assert len(result["results"]) == 1
         assert result["results"][0]["winner"] == "A"
 
-    def test_compare_models_with_winner_b(self) -> None:
+    def test_compare_models_with_winner_b(self, nvidia_key) -> None:
         """When model B wins, verdict reflects that."""
         from unittest.mock import MagicMock, patch
 
@@ -1060,7 +1072,7 @@ class TestCompareModels:
         assert result["summary"]["model_b_wins"] == 1
         assert result["verdict"] == "model-b wins"
 
-    def test_compare_models_multiple_questions(self) -> None:
+    def test_compare_models_multiple_questions(self, nvidia_key) -> None:
         """Works with multiple questions and tallies results correctly."""
         from unittest.mock import MagicMock, patch
 
@@ -1095,7 +1107,7 @@ class TestCompareModels:
         assert result["summary"]["total"] == 2
         assert result["verdict"] == "Tie"
 
-    def test_compare_models_judge_unavailable(self) -> None:
+    def test_compare_models_judge_unavailable(self, nvidia_key) -> None:
         """When judge API fails, result is counted as a tie."""
         from unittest.mock import MagicMock, patch
 

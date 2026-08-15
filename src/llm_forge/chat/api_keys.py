@@ -87,7 +87,7 @@ def require_anthropic_api_key() -> str:
             f"  Create one at {_ANTHROPIC_CONSOLE}, then either:\n"
             "    export ANTHROPIC_API_KEY=sk-ant-...\n"
             f"  or add ANTHROPIC_API_KEY=sk-ant-... to {ENV_FILE}\n"
-            "  Or run `llm-forge wizard` for the offline guided setup (no key needed)."
+            "  Or run `llm-forge setup` for the offline guided setup (no key needed)."
         )
     return key
 

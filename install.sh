@@ -19,7 +19,9 @@ DIM='\033[2m'
 BOLD='\033[1m'
 RESET='\033[0m'
 
-INSTALL_DIR="$HOME/.llm-forge"
+# Overridable so the installer can be tested against a scratch directory
+# instead of only ever being provable by overwriting the user's real install.
+INSTALL_DIR="${LLM_FORGE_HOME:-$HOME/.llm-forge}"
 
 echo ""
 echo -e "${BOLD}${CYAN}╭─────────────────────────────────────╮${RESET}"
@@ -153,7 +155,9 @@ ENV_FILE="$INSTALL_DIR/.env"
 
 if [ -n "$ANTHROPIC_API_KEY" ]; then
     echo -e "${GREEN}Using ANTHROPIC_API_KEY from your environment.${RESET}"
-elif [ -f "$ENV_FILE" ] && grep -q "^ANTHROPIC_API_KEY=" "$ENV_FILE" 2>/dev/null; then
+elif [ -n "$OLLAMA_API_KEY" ]; then
+    echo -e "${GREEN}Using OLLAMA_API_KEY from your environment.${RESET}"
+elif [ -f "$ENV_FILE" ] && grep -qE "^(ANTHROPIC|OLLAMA|OPENAI)_API_KEY=" "$ENV_FILE" 2>/dev/null; then
     echo -e "${GREEN}Using the API key already saved at $ENV_FILE${RESET}"
 elif [ -t 0 ]; then
     echo ""
@@ -173,13 +177,14 @@ elif [ -t 0 ]; then
         chmod 600 "$ENV_FILE"
         echo -e "${GREEN}Saved to $ENV_FILE${RESET}"
     else
-        echo -e "${DIM}Skipped. Run 'llm-forge wizard' for the offline guided setup.${RESET}"
+        echo -e "${DIM}Skipped. Run 'llm-forge setup' for the offline guided setup.${RESET}"
     fi
 else
     # Piped install (curl | bash) has no stdin to prompt on.
     echo -e "${YELLOW}No API key configured.${RESET}"
     echo -e "${DIM}Set one later:  export ANTHROPIC_API_KEY=sk-ant-...${RESET}"
-    echo -e "${DIM}Or run 'llm-forge wizard' for the offline guided setup.${RESET}"
+    echo -e "${DIM}Ollama Cloud also works:  export OLLAMA_API_KEY=...${RESET}"
+    echo -e "${DIM}Or run 'llm-forge setup' for the offline guided setup.${RESET}"
 fi
 
 # Create launcher
@@ -288,7 +293,12 @@ else
 fi
 
 echo ""
-echo -e "${GREEN}AI services built-in — ready to use!${RESET}"
+if [ -f "$ENV_FILE" ] || [ -n "$ANTHROPIC_API_KEY" ] || [ -n "$OLLAMA_API_KEY" ]; then
+    echo -e "${GREEN}API key configured — ready to use.${RESET}"
+else
+    echo -e "${DIM}Set an API key (Anthropic, Ollama, or OpenAI) to use the assistant,${RESET}"
+    echo -e "${DIM}or run 'llm-forge setup' for the offline wizard.${RESET}"
+fi
 echo ""
 echo -e "${DIM}Type 'llm-forge' to start building your AI model.${RESET}"
 echo ""

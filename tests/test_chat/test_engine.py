@@ -23,10 +23,15 @@ class TestEngineInit:
     """Test ChatEngine construction and provider detection."""
 
     def test_engine_init_no_api_key(self, tmp_path: Path) -> None:
-        """ChatEngine with no key defaults to 'anthropic'."""
+        """With nothing configured the provider is 'none', not a guess.
+
+        It used to default to 'anthropic' regardless, which meant a user with
+        no key got an auth error from Anthropic instead of being told which
+        keys the tool accepts.
+        """
         with patch.dict("os.environ", {}, clear=True):
             engine = ChatEngine(project_dir=str(tmp_path))
-        assert engine.provider == "anthropic"
+        assert engine.provider == "none"
 
     def test_engine_init_anthropic_key(self, tmp_path: Path) -> None:
         """ChatEngine detects anthropic provider when ANTHROPIC_API_KEY is set."""
@@ -196,3 +201,40 @@ class TestEndSession:
         conn.close()
         assert row is not None
         assert row[0] is not None
+
+
+class TestOllamaProviderDetection:
+    """Provider detection with Ollama in the mix."""
+
+    def test_ollama_key_selects_ollama(self, tmp_path: Path) -> None:
+        with patch.dict("os.environ", {"OLLAMA_API_KEY": "fake"}, clear=True), patch(
+            "llm_forge.chat.ollama_provider.default_model", return_value="gpt-oss:120b"
+        ):
+            engine = ChatEngine(project_dir=str(tmp_path))
+        assert engine.provider == "ollama"
+        assert engine.model_key == "gpt-oss:120b"
+
+    def test_anthropic_wins_over_ollama(self, tmp_path: Path) -> None:
+        """Anthropic first -- the prompts and tool schemas are tuned for it."""
+        env = {"ANTHROPIC_API_KEY": "sk-ant-fake", "OLLAMA_API_KEY": "fake"}
+        with patch.dict("os.environ", env, clear=True):
+            engine = ChatEngine(project_dir=str(tmp_path))
+        assert engine.provider == "anthropic"
+
+    def test_local_ollama_needs_no_key(self, tmp_path: Path) -> None:
+        """A running `ollama serve` is a usable provider with no credentials."""
+        with patch.dict("os.environ", {}, clear=True), patch(
+            "llm_forge.chat.ollama_provider.is_local_ollama_running", return_value=True
+        ), patch(
+            "llm_forge.chat.ollama_provider.default_model", return_value="llama3"
+        ):
+            engine = ChatEngine(project_dir=str(tmp_path))
+        assert engine.provider == "ollama"
+
+    def test_claude_model_key_is_not_carried_into_ollama(self, tmp_path: Path) -> None:
+        """A Claude key like 'opus-5' would 404 against Ollama's model API."""
+        with patch.dict("os.environ", {"OLLAMA_API_KEY": "fake"}, clear=True), patch(
+            "llm_forge.chat.ollama_provider.default_model", return_value="qwen3.5:397b"
+        ):
+            engine = ChatEngine(project_dir=str(tmp_path), model_key="opus-5")
+        assert engine.model_key == "qwen3.5:397b"

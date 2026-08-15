@@ -14,6 +14,36 @@ import pytest
 import yaml
 
 # ---------------------------------------------------------------------------
+# Credential isolation
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _isolate_credentials(tmp_path_factory, monkeypatch):
+    """Keep the suite from reading the developer's real credentials.
+
+    Key lookup falls back to ``~/.llm-forge/.env``, so without this a developer
+    who has an OLLAMA_API_KEY saved gets different provider-detection results
+    than CI does -- and `patch.dict(os.environ, clear=True)` does not help,
+    because the file is not the environment. Point every test at an empty file
+    in a temp dir instead.
+
+    Tests that need a key present should set it explicitly.
+    """
+    from llm_forge.chat import api_keys, ollama_provider
+
+    empty_env = tmp_path_factory.mktemp("no-credentials") / ".env"
+    monkeypatch.setattr(api_keys, "ENV_FILE", empty_env)
+
+    # Provider detection probes for a local `ollama serve`. That is a live
+    # network call, so on a developer machine running Ollama the suite would
+    # detect a different provider than CI does. Assume not-running unless a
+    # test says otherwise.
+    monkeypatch.setattr(ollama_provider, "is_local_ollama_running", lambda: False)
+    yield
+
+
+# ---------------------------------------------------------------------------
 # Temporary directory
 # ---------------------------------------------------------------------------
 

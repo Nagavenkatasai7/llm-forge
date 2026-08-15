@@ -1,38 +1,62 @@
 """NVIDIA NIM provider for LLM Forge.
 
-Gives every user free access to 189+ models via NVIDIA's NIM API.
-Uses an embedded API key (obfuscated, not plaintext) for the community.
-Users can also provide their own NVIDIA_API_KEY for higher limits.
+Access to NVIDIA's NIM API using the user's own ``NVIDIA_API_KEY``.
+
+Earlier releases embedded a project-owned NVIDIA key here, XOR'd with a single
+byte and base64-encoded, described as a "community" key. That key was published
+in a public repository and must be treated as compromised; it has been removed
+along with the deobfuscation helper. Nothing in this module reads a bundled
+secret.
 """
 
 from __future__ import annotations
 
-import base64
 import os
 
 # NVIDIA NIM API configuration
 NVIDIA_BASE_URL = "https://integrate.api.nvidia.com/v1"
 
-# Obfuscated community API key (XOR + base64)
-# Users can override with NVIDIA_API_KEY env var
-_OBFUSCATED_KEY = "RFxLWkMHS2ViTmkaGBhjWBoYY1ldTRNtWE4fRH1lcEVBc2xyeHp/bUJaYhNDbGJlRRJwTGNCRV4eWExIbB9JWWRraEJ7SQ=="
-_XOR_KEY = 42  # Simple XOR for basic obfuscation
-
-
-def _deobfuscate(encoded: str) -> str:
-    """Deobfuscate the embedded API key."""
-    raw = base64.b64decode(encoded)
-    return "".join(chr(b ^ _XOR_KEY) for b in raw)
+NVIDIA_SIGNUP_URL = "https://build.nvidia.com/"
 
 
 def get_nvidia_api_key() -> str:
-    """Get NVIDIA API key -- user's own or embedded community key."""
-    # User's own key takes priority
-    user_key = os.environ.get("NVIDIA_API_KEY", "").strip()
-    if user_key:
-        return user_key
-    # Fall back to embedded community key
-    return _deobfuscate(_OBFUSCATED_KEY)
+    """Return the user's NVIDIA API key, or an empty string if unset.
+
+    Checks ``NVIDIA_API_KEY`` first, then ``~/.llm-forge/.env``.
+    """
+    key = os.environ.get("NVIDIA_API_KEY", "").strip()
+    if key:
+        return key
+
+    from llm_forge.chat.api_keys import _read_env_file
+
+    return _read_env_file("NVIDIA_API_KEY")
+
+
+def has_nvidia_api_key() -> bool:
+    """True when an NVIDIA key is configured."""
+    return bool(get_nvidia_api_key())
+
+
+def nvidia_client():
+    """Build an OpenAI-SDK client for NVIDIA NIM, or fail with instructions.
+
+    Without this guard a missing key reaches the API as an empty string and
+    comes back as an opaque 401, which reads like a broken tool rather than
+    missing setup.
+    """
+    key = get_nvidia_api_key()
+    if not key:
+        raise RuntimeError(
+            "No NVIDIA API key found. NVIDIA NIM tools need your own key.\n"
+            f"  Create one free at {NVIDIA_SIGNUP_URL}, then:\n"
+            "    export NVIDIA_API_KEY=nvapi-...\n"
+            "  (or add NVIDIA_API_KEY=... to ~/.llm-forge/.env)"
+        )
+
+    from openai import OpenAI
+
+    return OpenAI(base_url=NVIDIA_BASE_URL, api_key=key)
 
 
 # Available models organized by category

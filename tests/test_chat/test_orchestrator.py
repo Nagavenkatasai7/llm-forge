@@ -2,6 +2,7 @@
 from __future__ import annotations
 import json
 import os
+import pathlib
 from unittest.mock import MagicMock, patch
 import pytest
 
@@ -24,15 +25,52 @@ class TestOrchestratorInit:
             assert api_keys.get_google_api_key() == ""
             assert not api_keys.has_anthropic_api_key()
 
-    def test_source_contains_no_obfuscated_key_blobs(self) -> None:
-        """The deobfuscation machinery itself must be gone, not just unused."""
-        import inspect
+    def test_no_module_embeds_an_obfuscated_credential(self) -> None:
+        """Scan the WHOLE package, not just api_keys.py.
 
+        The first version of this guard only checked api_keys.py, and missed a
+        third embedded credential -- an NVIDIA key using the identical
+        XOR+base64 scheme in nvidia_provider.py. A guard scoped to the one file
+        you already knew about does not catch the file you didn't.
+        """
+        import re
+        from pathlib import Path
+
+        import llm_forge
+
+        package_root = Path(llm_forge.__file__).parent
+        offenders: list[str] = []
+
+        # A long base64-ish literal in source is how every embedded key here
+        # has been smuggled in so far.
+        blob = re.compile(r'["\'][A-Za-z0-9+/]{60,}={0,2}["\']')
+
+        for py_file in package_root.rglob("*.py"):
+            source = py_file.read_text(encoding="utf-8", errors="replace")
+            rel = py_file.relative_to(package_root)
+
+            for marker in ("_XOR_KEY", "_deobfuscate", "_OBFUSCATED_KEY"):
+                if marker in source:
+                    offenders.append(f"{rel}: {marker}")
+
+            for match in blob.finditer(source):
+                offenders.append(f"{rel}: long base64 literal {match.group()[:24]}...")
+
+        assert not offenders, "possible embedded credentials:\n  " + "\n  ".join(offenders)
+
+    def test_no_provider_falls_back_to_a_bundled_key(self) -> None:
+        """Every provider must return empty rather than a baked-in credential."""
+        from llm_forge.chat.nvidia_provider import get_nvidia_api_key
+        from llm_forge.chat.ollama_provider import get_ollama_api_key
         from llm_forge.chat import api_keys
 
-        source = inspect.getsource(api_keys)
-        for marker in ("_XOR_KEY", "_deobfuscate", "b64decode", "_ANTHROPIC_OBF"):
-            assert marker not in source, f"leftover key-obfuscation code: {marker}"
+        with patch.dict(os.environ, {}, clear=True), patch.object(
+            api_keys, "ENV_FILE", pathlib.Path("/nonexistent/.env")
+        ):
+            assert api_keys.get_anthropic_api_key() == ""
+            assert api_keys.get_google_api_key() == ""
+            assert get_nvidia_api_key() == ""
+            assert get_ollama_api_key() == ""
 
     def test_env_var_is_used(self) -> None:
         """A user-supplied env var is what gets returned."""

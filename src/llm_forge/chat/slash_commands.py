@@ -300,6 +300,39 @@ def _cmd_model(engine: ChatEngine, args: str) -> str:
             return f"Switched to {info['name']} ({info['params']})"
         return f"Unknown model: {args}\nAvailable: {', '.join(NVIDIA_MODELS.keys())}"
 
+    # Ollama — the catalogue is whatever the key can reach, fetched live, so
+    # any model Ollama adds is selectable without a release here.
+    if getattr(engine, "provider", "") == "ollama":
+        from llm_forge.chat.ollama_provider import (
+            OllamaError,
+            describe_models,
+            list_models,
+            supports_tools,
+        )
+
+        if not args:
+            return f"Current model: {engine.model_key}\n\n{describe_models()}"
+
+        try:
+            available = list_models()
+        except OllamaError as exc:
+            return str(exc)
+
+        if args not in available:
+            close = [m for m in available if args.lower() in m.lower()]
+            hint = f"\nDid you mean: {', '.join(close)}" if close else ""
+            return f"Unknown model: {args}{hint}\n\nRun /model to list all {len(available)}."
+
+        # Verify before switching. Silently accepting a model that cannot call
+        # tools leaves the assistant chatty but unable to do anything, which is
+        # far harder to diagnose than a refusal here.
+        ok, reason = supports_tools(args)
+        if not ok:
+            return f"Cannot switch to {args}.\n\n{reason}"
+
+        engine.model_key = args
+        return f"Switched to {args} ({reason})."
+
     # Anthropic / default — show Claude models
     from llm_forge.chat.engine import CLAUDE_MODELS
 
@@ -343,13 +376,7 @@ def _cmd_test(engine: ChatEngine, args: str) -> str:
             "Usage: /test <question>\nTests the current model. Use /model to switch models first."
         )
 
-    from openai import OpenAI
-
-    from llm_forge.chat.nvidia_provider import (
-        NVIDIA_BASE_URL,
-        NVIDIA_MODELS,
-        get_nvidia_api_key,
-    )
+    from llm_forge.chat.nvidia_provider import NVIDIA_MODELS, nvidia_client
 
     # Get current model
     model_info = NVIDIA_MODELS.get(engine.model_key)
@@ -357,7 +384,7 @@ def _cmd_test(engine: ChatEngine, args: str) -> str:
         return "No NVIDIA model selected. Use /model to select one."
 
     try:
-        client = OpenAI(base_url=NVIDIA_BASE_URL, api_key=get_nvidia_api_key())
+        client = nvidia_client()
         response = client.chat.completions.create(
             model=model_info["id"],
             messages=[{"role": "user", "content": args}],

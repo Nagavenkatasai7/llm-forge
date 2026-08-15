@@ -2071,9 +2071,9 @@ def _generate_training_data(
     """Generate synthetic training data using NVIDIA NIM models."""
     from openai import OpenAI
 
-    from llm_forge.chat.nvidia_provider import NVIDIA_BASE_URL, get_nvidia_api_key
+    from llm_forge.chat.nvidia_provider import nvidia_client
 
-    client = OpenAI(base_url=NVIDIA_BASE_URL, api_key=get_nvidia_api_key())
+    client = nvidia_client()
 
     output_path = output_path or "data/synthetic_train.jsonl"
 
@@ -2161,9 +2161,9 @@ def _evaluate_with_llm(
     """Evaluate model outputs using NVIDIA NIM as judge."""
     from openai import OpenAI
 
-    from llm_forge.chat.nvidia_provider import NVIDIA_BASE_URL, get_nvidia_api_key
+    from llm_forge.chat.nvidia_provider import nvidia_client
 
-    client = OpenAI(base_url=NVIDIA_BASE_URL, api_key=get_nvidia_api_key())
+    client = nvidia_client()
 
     evaluations: list[dict] = []
     for q, output in zip(questions, model_outputs, strict=False):
@@ -2227,9 +2227,9 @@ def _test_model(
     """Test a base model via NVIDIA NIM to see its capabilities."""
     from openai import OpenAI
 
-    from llm_forge.chat.nvidia_provider import NVIDIA_BASE_URL, get_nvidia_api_key
+    from llm_forge.chat.nvidia_provider import nvidia_client
 
-    client = OpenAI(base_url=NVIDIA_BASE_URL, api_key=get_nvidia_api_key())
+    client = nvidia_client()
 
     # Handle multiple questions
     if num_questions > 1:
@@ -2281,9 +2281,9 @@ def _generate_embeddings(
     """Generate embeddings using NVIDIA NIM embedding models."""
     from openai import OpenAI
 
-    from llm_forge.chat.nvidia_provider import NVIDIA_BASE_URL, get_nvidia_api_key
+    from llm_forge.chat.nvidia_provider import nvidia_client
 
-    client = OpenAI(base_url=NVIDIA_BASE_URL, api_key=get_nvidia_api_key())
+    client = nvidia_client()
 
     try:
         # NVIDIA embedding API is OpenAI-compatible
@@ -2346,9 +2346,9 @@ def _generate_script(
     """Generate a Python script using NVIDIA's code model."""
     from openai import OpenAI
 
-    from llm_forge.chat.nvidia_provider import NVIDIA_BASE_URL, get_nvidia_api_key
+    from llm_forge.chat.nvidia_provider import nvidia_client
 
-    client = OpenAI(base_url=NVIDIA_BASE_URL, api_key=get_nvidia_api_key())
+    client = nvidia_client()
 
     context = f"Task: {task_description}"
     if input_file:
@@ -2425,9 +2425,9 @@ def _compare_models(
     """A/B test two models on the same questions with AI judging."""
     from openai import OpenAI
 
-    from llm_forge.chat.nvidia_provider import NVIDIA_BASE_URL, get_nvidia_api_key
+    from llm_forge.chat.nvidia_provider import nvidia_client
 
-    client = OpenAI(base_url=NVIDIA_BASE_URL, api_key=get_nvidia_api_key())
+    client = nvidia_client()
 
     comparisons: list[dict] = []
     a_wins = 0

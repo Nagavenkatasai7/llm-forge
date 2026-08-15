@@ -92,6 +92,10 @@ key that was already fetched.
 | 26 | Undefined `logger` in `_detect_available_vram`'s exception handler — would have raised `NameError` on the very path meant to degrade gracefully | `chat/tools.py:1896` | **Fixed** — caught by `ruff F821` before commit; branch forced and verified to return `(0.0, "cpu")` |
 | 27 | `warn_if_tight` written but never called | `training/preflight.py` | **Fixed** — wired into the training stage |
 | 28 | **The full-screen TUI was unreachable.** `launch_tui()` was defined and its docstring said "called by `llm-forge --tui`" — but no such flag existed and nothing called the function. The entire Textual interface was dead code | `chat/tui.py:467`, `cli.py:206` | **Fixed** — `--tui` flag added and verified end to end from a real install |
+| 30 | **A THIRD embedded credential.** `nvidia_provider.py` carried an NVIDIA API key using the identical XOR+base64 scheme, described as a "community" key. My own regression guard missed it because it only scanned `api_keys.py` | `chat/nvidia_provider.py:18` | **Fixed** — key and deobfuscation removed; guard now scans the whole package for the markers *and* for long base64 literals |
+| 31 | The test suite read the developer's real `~/.llm-forge/.env` and probed for a live local `ollama serve`, so results depended on the machine | `tests/conftest.py` | **Fixed** — autouse fixture isolates the credential file and stubs the network probe |
+| 32 | `llm-forge wizard` referenced in the installer and error messages; no such subcommand exists (it is `setup`) | `install.sh`, `chat/api_keys.py:90` | **Fixed** |
+| 33 | Installer printed "No API key configured" and "API key configured — ready to use" in the same run, because the first check only looked for an Anthropic key | `install.sh` | **Fixed** |
 | 29 | `launch_tui` skipped the API-key check the scrolling UI does, so with no key it would take over the terminal and *then* have a dead engine, with no way to answer the prompt | `chat/tui.py:465` | **Fixed** — checks first, prints setup instructions, exits 1 |
 
 ---

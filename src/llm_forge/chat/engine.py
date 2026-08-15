@@ -25,13 +25,27 @@ from llm_forge.chat.tools import TOOLS, execute_tool
 
 
 def _get_provider() -> str:
-    """Detect which LLM provider to use based on available API keys."""
-    if os.environ.get("ANTHROPIC_API_KEY"):
+    """Detect which LLM provider to use based on available credentials.
+
+    Anthropic first because the assistant's prompts and tool schemas are tuned
+    for it, then Ollama (cloud key, or a local server which needs no key at
+    all), then OpenAI.
+    """
+    from llm_forge.chat.api_keys import get_anthropic_api_key
+
+    if get_anthropic_api_key():
         return "anthropic"
+
+    from llm_forge.chat.ollama_provider import has_ollama_api_key, is_local_ollama_running
+
+    if has_ollama_api_key() or is_local_ollama_running():
+        return "ollama"
+
     if os.environ.get("OPENAI_API_KEY"):
         return "openai"
-    # Default to anthropic — user must set ANTHROPIC_API_KEY
-    return "anthropic"
+
+    # Nothing configured. The caller surfaces setup instructions.
+    return "none"
 
 
 def _get_anthropic_client():
@@ -199,6 +213,14 @@ class ChatEngine:
             if self.model_key not in NVIDIA_MODELS:
                 self.model_key = DEFAULT_NVIDIA_MODEL
 
+        # Ollama model names are free-form and fetched live, so a Claude model
+        # key inherited from the default would 404. Resolve one from the API.
+        if self.provider == "ollama":
+            from llm_forge.chat.ollama_provider import default_model
+
+            if model_key is None or self.model_key in CLAUDE_MODELS:
+                self.model_key = default_model() or "gpt-oss:120b"
+
         # Track recent tool names for context detection (model output vs instruction)
         self._recent_tool_names: list[str] = []
 
@@ -293,6 +315,34 @@ class ChatEngine:
             elif self.provider == "openai":
                 response = _call_openai(self.messages, self.system)
                 text, tool_calls = self._parse_openai_response(response)
+            elif self.provider == "ollama":
+                from llm_forge.chat.ollama_provider import (
+                    OllamaError,
+                    call_ollama,
+                    stream_ollama,
+                )
+
+                try:
+                    if on_text:
+                        response = stream_ollama(
+                            self.messages,
+                            self.system,
+                            model=self.model_key,
+                            on_text=on_text,
+                            interrupt_check=interrupt_check,
+                        )
+                    else:
+                        response = call_ollama(
+                            self.messages, self.system, model=self.model_key
+                        )
+                except OllamaError as exc:
+                    # Already a user-facing explanation (bad key, empty paid
+                    # balance, unknown model) -- surface it rather than a stack
+                    # trace, and keep the session alive so /model can fix it.
+                    return str(exc)
+
+                # Ollama Cloud is OpenAI-compatible, so the same parser applies.
+                text, tool_calls = self._parse_openai_response(response)
             elif self.provider == "nvidia":
                 from llm_forge.chat.nvidia_provider import call_nvidia, stream_nvidia
 
@@ -317,9 +367,12 @@ class ChatEngine:
                 tool_calls = []
             else:
                 return (
-                    "No API key found. Set ANTHROPIC_API_KEY or OPENAI_API_KEY.\n\n"
-                    "Get a free Claude API key at: https://console.anthropic.com/\n"
-                    "Or set OPENAI_API_KEY for OpenAI."
+                    "No API key found. LLM Forge can use any of:\n\n"
+                    "  ANTHROPIC_API_KEY   https://console.anthropic.com/settings/keys\n"
+                    "  OLLAMA_API_KEY      https://ollama.com/settings/keys\n"
+                    "  OPENAI_API_KEY      https://platform.openai.com/api-keys\n\n"
+                    "A local `ollama serve` also works with no key at all.\n"
+                    "Or run `llm-forge setup` for the offline wizard."
                 )
 
             # If interrupted, save partial response and return
@@ -349,7 +402,7 @@ class ChatEngine:
 
             if self.provider == "anthropic":
                 self._handle_anthropic_tools(response, tool_calls)
-            elif self.provider == "openai":
+            elif self.provider in ("openai", "ollama"):
                 self._handle_openai_tools(response, tool_calls)
 
     def _execute_tool(self, name: str, input_data: dict) -> str:
