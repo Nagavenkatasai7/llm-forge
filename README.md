@@ -99,14 +99,20 @@ tell you before a run starts rather than failing midway through:
 | Fast attention | FlashAttention-2 | SDPA (set automatically) |
 | Multi-GPU | DeepSpeed / FSDP | not applicable |
 
-What fits in 24 GB of unified memory (~18 GB usable):
+What fits in 24 GB of unified memory (~18 GB usable), from real parameter
+counts:
 
-| Base model | Method | Needs |
-|---|---|---|
-| SmolLM2-360M | full fine-tune | ~5 GB |
-| Llama-3.2-1B | full fine-tune | ~15 GB |
-| Llama-3.2-3B | LoRA | ~8 GB |
-| Llama-3.1-8B | MLX LoRA (4-bit) | ~8 GB |
+| Base model | Params | Method | Needs |
+|---|---|---|---|
+| SmolLM2-360M | 0.36B | full fine-tune | 5.5 GB |
+| Llama-3.2-1B | 1.24B | LoRA | 3.2 GB |
+| Llama-3.2-3B | 3.21B | LoRA | 8.3 GB |
+| Llama-3.1-8B | 8.03B | MLX LoRA (4-bit) | 7.9 GB |
+
+A *full* fine-tune of the 1.2B needs 18.6 GB — just over. Optimizer state is 12
+of the 16 bytes per parameter, so SmolLM2-360M is the largest model here where
+every weight can be updated. `llm-forge` works this out for whatever model you
+name; you don't have to.
 
 ## Installation Options
 

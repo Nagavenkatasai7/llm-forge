@@ -187,9 +187,18 @@ def _stage_training(context: dict[str, Any]) -> dict[str, Any]:
     # Fail before anything downloads. A QLoRA config on Apple Silicon otherwise
     # gets several minutes and a multi-gigabyte download in before bitsandbytes
     # raises inside from_pretrained.
-    from llm_forge.training.preflight import assert_compatible
+    from llm_forge.chat.discovery import params_from_name
+    from llm_forge.training.preflight import assert_compatible, warn_if_tight
 
     assert_compatible(config)
+
+    # Not fatal, but worth saying out loud: on unified memory an overshoot
+    # swaps instead of raising, so the failure mode is a run that never
+    # visibly fails and just crawls.
+    model_name = getattr(getattr(config, "model", None), "name", "") or ""
+    tight = warn_if_tight(config, params_from_name(model_name))
+    if tight:
+        logger.warning(tight)
 
     # Route to MLX backend if enabled
     if hasattr(config, "mlx") and config.mlx.enabled:

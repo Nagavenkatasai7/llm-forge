@@ -70,7 +70,11 @@ BYTES_BREAKDOWN: dict[str, dict[str, float]] = {
 # Which backends each method can actually run on.
 METHOD_BACKENDS: dict[str, set[str]] = {
     "full": {"cuda", "mps", "mlx"},
-    "full_8bit_optim": {"cuda", "mps", "mlx"},
+    # An 8-bit optimizer means training.optim: adamw_8bit, which is a
+    # bitsandbytes optimizer -- CUDA only. MLX's optimizer set
+    # (adam/adamw/sgd/adafactor) has no 8-bit variant either, so there is no
+    # Apple equivalent to fall back to.
+    "full_8bit_optim": {"cuda"},
     "lora": {"cuda", "mps", "mlx"},
     # bitsandbytes has no Metal backend.
     "qlora": {"cuda"},
@@ -147,6 +151,11 @@ def assess_fit(
                 note = (
                     "bitsandbytes 4-bit quantization is CUDA-only. On Apple "
                     "Silicon use mlx_lora_4bit instead (mlx_lm.convert -q)."
+                )
+            elif method == "full_8bit_optim":
+                note = (
+                    "Needs training.optim: adamw_8bit, a bitsandbytes optimizer "
+                    "-- CUDA only. MLX has no 8-bit optimizer equivalent."
                 )
             elif method == "mlx_lora_4bit":
                 note = "MLX runs only on Apple Silicon."

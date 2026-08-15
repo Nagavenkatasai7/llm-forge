@@ -102,20 +102,30 @@ key that was already fetched.
 ## Training on 24 GB of unified memory
 
 Your machine — Apple M4 Pro, 24 GB unified, **~18 GB usable** after the OS
-reserve. Produced by `discovery.assess_fit`, the same code the agent now quotes:
+reserve. Figures below come from `discovery.assess_fit` against **real
+parameter counts read from each repo's safetensors index** — not name-parsing,
+not estimates:
 
-| Model size | Best method that fits | Needs | Notes |
-|---|---|---|---|
-| 360M | **full fine-tune** | ~5 GB | Every weight updated, comfortable headroom |
-| 1.2B | **full fine-tune** (8-bit optimizer) | ~9.5 GB | Full fine-tune in bf16 + Adam needs 18.7 GB — just over |
-| 3.2B | **LoRA** (bf16) | ~8.3 GB | Full fine-tune needs 48 GB |
-| 8B | **MLX LoRA, 4-bit** | ~7.9 GB | bf16 LoRA needs 20.6 GB — over budget |
-| 14B | **MLX LoRA, 4-bit** | ~13.7 GB | Practical ceiling for this machine |
+| Base model | Params | Best method that fits | Needs | Full fine-tune would need |
+|---|---|---|---|---|
+| SmolLM2-360M | 0.36B | **full fine-tune** | 5.5 GB | 5.5 GB ✅ |
+| Llama-3.2-1B-Instruct | 1.24B | **LoRA** | 3.2 GB | 18.6 GB ❌ (just over) |
+| Qwen2.5-1.5B-Instruct | 1.54B | **LoRA** | 4.0 GB | 23.3 GB ❌ |
+| Llama-3.2-3B-Instruct | 3.21B | **LoRA** | 8.3 GB | 48.4 GB ❌ |
+| Llama-3.1-8B-Instruct | 8.03B | **MLX LoRA (4-bit)** | 7.9 GB | 120.9 GB ❌ |
 
-**Recommended for a first complete model:** Llama-3.2-1B or Qwen2.5-1.5B with a
-full fine-tune. Every weight updates, it fits with room to spare, and a run
-finishes in a sensible time — which matters more than raw capability when the
-goal is a working end-to-end result you can evaluate and iterate on.
+**Note the 1.2B row.** A full fine-tune of Llama-3.2-1B needs ~18.6 GB against
+an 18 GB budget — it misses by about half a gigabyte. Optimizer state is 12 of
+the 16 bytes per parameter, so trimming sequence length or batch size does not
+rescue it; the shortfall is structural. **SmolLM2-360M is the largest model on
+this machine where every weight can be updated.**
+
+**Recommended for a first complete model: Llama-3.2-3B-Instruct with LoRA**
+(8.3 GB). It leaves 10 GB of headroom, it is a genuinely capable base, and LoRA
+on a 3B beats a full fine-tune of a 360M on essentially any real task — the
+base model's quality dominates. If you specifically want every weight updated,
+use SmolLM2-360M. If you want the strongest possible result and don't mind the
+extra setup, Llama-3.1-8B via MLX 4-bit LoRA fits in 7.9 GB.
 
 Two things that are not available on this machine, and that the agent now
 refuses rather than attempts:
@@ -128,6 +138,31 @@ Unified memory does not fail cleanly. Overshooting the budget swaps instead of
 raising OOM, so the symptom is a run that gets ten times slower rather than one
 that stops. That is why the budget is 18 GB rather than 24, and why it is
 displayed permanently in the status bar.
+
+---
+
+## Verified vs. not verified
+
+**Exercised in this environment:**
+
+- Full test suite: 1298 passed, 21 skipped
+- Live HuggingFace Hub queries — ground-truth scoring rates `openai/gsm8k` 5/6
+  "strong" and `praneethd7/gsm8k_sycophancy` 0/6 "none"
+- Real parameter counts pulled from safetensors indexes for the 24 GB table above
+- Hardware detection on this Mac: `Apple M4 Pro · 18/24 GB usable (mps)`
+- The TUI boots and renders headless via Textual's pilot
+- The no-key path end to end: orchestrator raises `MissingAPIKeyError` →
+  `_setup_api_key` raises `NoAPIKeyError` → offline wizard
+- `_detect_available_vram`'s exception branch returns `(0.0, "cpu")` instead of
+  raising, with the failure forced
+
+**Not exercised — needs your key on first run:**
+
+- `web_search`. The implementation follows the current server-side web-search
+  tool contract, but there is no Anthropic key in this environment, so it has
+  never made a live call. Its error path is tested; its success path is not.
+- Any actual training run. The memory model, preflight gate, and routing are
+  unit-tested, but no model has been downloaded or a step executed here.
 
 ---
 

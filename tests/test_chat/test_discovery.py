@@ -127,9 +127,31 @@ class TestMemoryFit:
         """The user's actual machine: 24 GB unified, ~18 GB usable."""
         assert recommended_method(assess_fit(8e9, 18.0, backend="mps")) == "mlx_lora_4bit"
 
-    def test_1b_on_24gb_mac_can_full_finetune(self) -> None:
-        best = recommended_method(assess_fit(1.24e9, 18.0, backend="mps"))
-        assert best in {"full", "full_8bit_optim"}
+    def test_1b_on_24gb_mac_routes_to_lora(self) -> None:
+        """A 1.24B full fine-tune needs ~18.6 GB -- just over an 18 GB budget.
+
+        Optimizer state dominates (12 of the 16 bytes/param), so trimming
+        sequence length does not rescue it. LoRA is the honest answer.
+        """
+        assert recommended_method(assess_fit(1.24e9, 18.0, backend="mps")) == "lora"
+
+    def test_360m_full_finetune_fits_on_24gb_mac(self) -> None:
+        """The largest model that can have every weight updated on this machine."""
+        assert recommended_method(assess_fit(360e6, 18.0, backend="mps")) == "full"
+
+    def test_8bit_optimizer_never_offered_on_apple(self) -> None:
+        """adamw_8bit is a bitsandbytes optimizer, and MLX has no equivalent.
+
+        Recommending it on Apple Silicon would be advice the user cannot act on
+        -- the same class of error as recommending QLoRA there.
+        """
+        verdicts = {v.method: v for v in assess_fit(1e9, 18.0, backend="mps")}
+        assert not verdicts["full_8bit_optim"].fits
+        assert "CUDA only" in verdicts["full_8bit_optim"].note
+
+    def test_8bit_optimizer_offered_on_cuda(self) -> None:
+        verdicts = {v.method: v for v in assess_fit(1e9, 18.0, backend="cuda")}
+        assert verdicts["full_8bit_optim"].fits
 
     def test_oversized_model_has_no_recommendation(self) -> None:
         assert recommended_method(assess_fit(400e9, 18.0, backend="mps")) is None
