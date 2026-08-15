@@ -41,41 +41,12 @@ def _get_anthropic_client():
     return anthropic.Anthropic()
 
 
-# Available Claude models for user selection
-CLAUDE_MODELS = {
-    "opus-4.6": {
-        "id": "claude-opus-4-6",
-        "name": "Claude Opus 4.6",
-        "context": "200K (1M beta)",
-        "cost": "$5/$25",
-    },
-    "sonnet-4.6": {
-        "id": "claude-sonnet-4-6",
-        "name": "Claude Sonnet 4.6",
-        "context": "200K (1M beta)",
-        "cost": "$3/$15",
-    },
-    "haiku-4.5": {
-        "id": "claude-haiku-4-5",
-        "name": "Claude Haiku 4.5",
-        "context": "200K",
-        "cost": "$1/$5",
-    },
-    "opus-4.5": {
-        "id": "claude-opus-4-5",
-        "name": "Claude Opus 4.5",
-        "context": "200K",
-        "cost": "$5/$25",
-    },
-    "sonnet-4.5": {
-        "id": "claude-sonnet-4-5",
-        "name": "Claude Sonnet 4.5",
-        "context": "200K",
-        "cost": "$3/$15",
-    },
-}
-
-DEFAULT_MODEL = "sonnet-4.6"
+# Model catalogue lives in claude_models.py so engine and orchestrator cannot drift.
+from llm_forge.chat.claude_models import (  # noqa: E402
+    CLAUDE_MODELS,
+    DEFAULT_MODEL,
+    model_id as _resolve_model_id,
+)
 
 
 def _call_anthropic(
@@ -85,7 +56,7 @@ def _call_anthropic(
     if client is None:
         client = _get_anthropic_client()
 
-    model_id = CLAUDE_MODELS.get(model_key or DEFAULT_MODEL, CLAUDE_MODELS[DEFAULT_MODEL])["id"]
+    model_id = _resolve_model_id(model_key)
 
     response = client.messages.create(
         model=model_id,
@@ -113,7 +84,7 @@ def _stream_anthropic(
     if client is None:
         client = _get_anthropic_client()
 
-    model_id = CLAUDE_MODELS.get(model_key or DEFAULT_MODEL, CLAUDE_MODELS[DEFAULT_MODEL])["id"]
+    model_id = _resolve_model_id(model_key)
     collected_text: list[str] = []
 
     with client.messages.stream(

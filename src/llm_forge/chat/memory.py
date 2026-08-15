@@ -15,6 +15,8 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 
+from llm_forge.chat.claude_models import SUMMARY_MODEL_ID
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
@@ -441,9 +443,9 @@ class MemoryManager:
 
         try:
             response = client.messages.create(
-                # claude-haiku-4-5 is the correct model ID (released after
-                # training data cutoff; verified against current Anthropic API).
-                model="claude-haiku-4-5",
+                # Session summarisation is simple, high-volume work -- the
+                # cheapest model is the right one. ID from claude_models.py.
+                model=SUMMARY_MODEL_ID,
                 max_tokens=1000,
                 messages=[
                     {

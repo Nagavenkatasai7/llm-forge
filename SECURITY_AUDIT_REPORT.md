@@ -8,9 +8,28 @@
 
 ---
 
+> ## ⚠️ CORRECTION — 2026-08-14
+>
+> **The "no hardcoded secrets" finding below is no longer accurate and was
+> already stale when written.** Commits `c203d71` ("feat: built-in API keys —
+> zero-config AI services") and `be7c5a6` ("fix: correct obfuscated Anthropic API
+> key") added a live Anthropic API key and a live Google API key to
+> `src/llm_forge/chat/api_keys.py`, XOR-obfuscated with a single-byte key and
+> base64-encoded. Obfuscation is not encryption: anyone who cloned the repository
+> could recover both keys in three lines of Python.
+>
+> **Status:** the keys and all deobfuscation code were removed on 2026-08-14, and
+> `tests/test_chat/test_orchestrator.py` now carries a regression guard that fails
+> if any bundled credential or obfuscation helper reappears. **The keys remain in
+> git history and must be treated as compromised — revoke them at
+> <https://console.anthropic.com/settings/keys> and in Google AI Studio.**
+> Removing them from the working tree does not un-publish them.
+>
+> Severity: **CRITICAL**. This supersedes the "No Critical Findings" line below.
+
 ## Executive Summary
 
-The llm-forge codebase demonstrates a **strong security posture** for a machine learning platform. The SAST scan found only 1 low-severity false positive across 69 Python source files and 25,700+ lines of code. No hardcoded secrets, no critical application dependency CVEs, and no high-severity code vulnerabilities were detected. The built-in `utils/security.py` module provides comprehensive safetensors validation, pickle safety analysis, sensitive value masking, and path traversal prevention.
+The llm-forge codebase demonstrates a **strong security posture** for a machine learning platform. The SAST scan found only 1 low-severity false positive across 69 Python source files and 25,700+ lines of code. No critical application dependency CVEs and no high-severity code vulnerabilities were detected. (The original scan also reported no hardcoded secrets; see the correction above — secrets were introduced after this scan ran.) The built-in `utils/security.py` module provides comprehensive safetensors validation, pickle safety analysis, sensitive value masking, and path traversal prevention.
 
 The primary security concerns are infrastructure-related: the GPU Docker base image (`nvidia/cuda:12.2.2-runtime-ubuntu22.04`) contains **55 OS-level vulnerabilities** (1 High, 50+ Medium) due to an outdated Ubuntu 22.04 snapshot from October 2023. Additionally, CI/CD workflows lack SHA-pinned GitHub Actions and minimal permission blocks, creating supply chain risk. These are standard hardening items that should be addressed before production deployment.
 

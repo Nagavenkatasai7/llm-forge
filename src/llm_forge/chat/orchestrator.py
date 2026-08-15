@@ -31,43 +31,14 @@ from llm_forge.chat.memory import MemoryManager
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Claude model catalogue (mirrors engine.py)
+# Claude model catalogue — imported, not duplicated (see claude_models.py)
 # ---------------------------------------------------------------------------
 
-CLAUDE_MODELS: dict[str, dict[str, str]] = {
-    "opus-4.6": {
-        "id": "claude-opus-4-6",
-        "name": "Claude Opus 4.6",
-        "context": "200K (1M beta)",
-        "cost": "$5/$25",
-    },
-    "sonnet-4.6": {
-        "id": "claude-sonnet-4-6",
-        "name": "Claude Sonnet 4.6",
-        "context": "200K (1M beta)",
-        "cost": "$3/$15",
-    },
-    "haiku-4.5": {
-        "id": "claude-haiku-4-5",
-        "name": "Claude Haiku 4.5",
-        "context": "200K",
-        "cost": "$1/$5",
-    },
-    "opus-4.5": {
-        "id": "claude-opus-4-5",
-        "name": "Claude Opus 4.5",
-        "context": "200K",
-        "cost": "$5/$25",
-    },
-    "sonnet-4.5": {
-        "id": "claude-sonnet-4-5",
-        "name": "Claude Sonnet 4.5",
-        "context": "200K",
-        "cost": "$3/$15",
-    },
-}
-
-DEFAULT_MODEL = "opus-4.6"
+from llm_forge.chat.claude_models import (  # noqa: E402
+    CLAUDE_MODELS,
+    DEFAULT_MODEL,
+    model_id as _resolve_model_id,
+)
 
 # ---------------------------------------------------------------------------
 # System prompt
@@ -191,10 +162,11 @@ class OrchestratorEngine:
         model_key: str | None = None,
         gemini_api_key: str = "",
     ) -> None:
-        from llm_forge.chat.api_keys import get_anthropic_api_key, get_google_api_key
+        from llm_forge.chat.api_keys import get_google_api_key, require_anthropic_api_key
 
-        # Use built-in keys if not provided
-        anthropic_key = os.environ.get("ANTHROPIC_API_KEY", "").strip() or get_anthropic_api_key()
+        # Anthropic drives the orchestrator, so its key is required. Google only
+        # backs the optional Gemini sub-agents and may be absent.
+        anthropic_key = require_anthropic_api_key()
         google_key = gemini_api_key or get_google_api_key()
 
         # Set env var so anthropic.Anthropic() picks it up
@@ -258,9 +230,7 @@ class OrchestratorEngine:
                 return partial
 
             # Call Claude
-            model_id = CLAUDE_MODELS.get(
-                self.model_key, CLAUDE_MODELS[DEFAULT_MODEL]
-            )["id"]
+            model_id = _resolve_model_id(self.model_key)
 
             if on_text:
                 response = self._stream_call(model_id, on_text, interrupt_check)

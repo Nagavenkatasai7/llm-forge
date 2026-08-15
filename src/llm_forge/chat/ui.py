@@ -21,6 +21,14 @@ from llm_forge.chat.project_setup import (
     scaffold_project,
 )
 
+
+class NoAPIKeyError(RuntimeError):
+    """Raised when no Anthropic key is available and the user declined to add one.
+
+    The caller catches this and drops the user into the offline wizard, which
+    needs no API access.
+    """
+
 # ---------------------------------------------------------------------------
 # Module-level console — reused across all output to avoid per-call overhead
 # and to prevent the multi-Console streaming corruption bug.
@@ -586,6 +594,14 @@ def _setup_api_key(engine: ChatEngine, provider: str | None) -> tuple[ChatEngine
             os.environ["ANTHROPIC_API_KEY"] = saved_key
             return ChatEngine(provider="anthropic", project_dir="."), None
 
+    # Environment variable or ~/.llm-forge/.env set by the installer
+    from llm_forge.chat.api_keys import get_anthropic_api_key
+
+    existing_key = get_anthropic_api_key()
+    if existing_key:
+        os.environ["ANTHROPIC_API_KEY"] = existing_key
+        return ChatEngine(provider="anthropic", project_dir="."), None
+
     # Ask the user
     try:
         if console is not None:
@@ -609,14 +625,14 @@ def _setup_api_key(engine: ChatEngine, provider: str | None) -> tuple[ChatEngine
         os.environ["ANTHROPIC_API_KEY"] = user_key
         _print_info("Key accepted. Validating with the API...")
         return ChatEngine(provider="anthropic", project_dir="."), user_key
-    else:
-        # Use built-in API keys
-        from llm_forge.chat.api_keys import get_anthropic_api_key
 
-        builtin_key = get_anthropic_api_key()
-        os.environ["ANTHROPIC_API_KEY"] = builtin_key
-        _print_info("Using built-in AI services.")
-        return ChatEngine(provider="anthropic", project_dir="."), builtin_key
+    # No key available -- fall back to the offline guided wizard.
+    _print_info(
+        "No API key set. Falling back to the offline wizard "
+        "(no API needed). Set ANTHROPIC_API_KEY later for the full "
+        "conversational experience."
+    )
+    raise NoAPIKeyError
 
 
 # ---------------------------------------------------------------------------
@@ -702,7 +718,13 @@ def launch_chat(provider: str | None = None) -> None:
     # If no API key, try to load saved key or ask the user
     _pending_api_key: str | None = None
     if engine.provider == "none":
-        engine, _pending_api_key = _setup_api_key(engine, provider)
+        try:
+            engine, _pending_api_key = _setup_api_key(engine, provider)
+        except NoAPIKeyError:
+            from llm_forge.wizard import TrainingWizard
+
+            TrainingWizard().run()
+            return
 
     # Show memory status
     session_count = 0

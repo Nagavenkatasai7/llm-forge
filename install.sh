@@ -3,7 +3,7 @@
 # Usage: curl -fsSL https://raw.githubusercontent.com/Nagavenkatasai7/llm-forge/main/install.sh | bash
 #
 # This script:
-# 1. Finds Python 3.10+ on your system
+# 1. Finds Python 3.10-3.13 on your system (PyTorch has no 3.14 wheels)
 # 2. Creates ~/.llm-forge/ with an isolated environment
 # 3. Installs llm-forge-new from PyPI
 # 4. Makes 'llm-forge' available as a command
@@ -29,7 +29,7 @@ echo -e "${BOLD}${CYAN}╰──────────────────
 echo ""
 
 # -----------------------------------------------------------------------
-# Step 1: Find Python 3.10+
+# Step 1: Find Python 3.10-3.13
 # -----------------------------------------------------------------------
 
 find_python() {
@@ -54,7 +54,10 @@ find_python() {
             local major minor
             major=$(echo "$version" | cut -d. -f1)
             minor=$(echo "$version" | cut -d. -f2)
-            if [ "$major" = "3" ] && [ "$minor" -ge 10 ]; then
+            # Upper bound matters: PyTorch publishes no wheels for Python 3.14+,
+            # so a bare `python3` pointing at 3.14 would install and then fail
+            # at the first `import torch`.
+            if [ "$major" = "3" ] && [ "$minor" -ge 10 ] && [ "$minor" -le 13 ]; then
                 echo "$cmd"
                 return 0
             fi
@@ -63,12 +66,13 @@ find_python() {
     return 1
 }
 
-echo -e "${DIM}Searching for Python 3.10+...${RESET}"
+echo -e "${DIM}Searching for Python 3.10-3.13...${RESET}"
 
 PYTHON_CMD=$(find_python) || true
 
 if [ -z "$PYTHON_CMD" ]; then
-    echo -e "${RED}Python 3.10+ not found on your system.${RESET}"
+    echo -e "${RED}Python 3.10-3.13 not found on your system.${RESET}"
+    echo -e "${DIM}(PyTorch has no wheels for 3.14+ yet, so a newer Python will not work.)${RESET}"
     echo ""
     if [[ "$OSTYPE" == "darwin"* ]]; then
         echo -e "Install it with Homebrew:"
@@ -125,8 +129,42 @@ VERSION=$("$INSTALL_DIR/venv/bin/python" -c "import llm_forge; print(llm_forge._
 # Step 4: Create launcher and add to PATH
 # -----------------------------------------------------------------------
 
-# API keys are built into the package — no configuration needed
-echo -e "${GREEN}AI services included — no API keys needed!${RESET}"
+# -----------------------------------------------------------------------
+# API key setup — LLM Forge ships no credentials of its own.
+# -----------------------------------------------------------------------
+
+ENV_FILE="$INSTALL_DIR/.env"
+
+if [ -n "$ANTHROPIC_API_KEY" ]; then
+    echo -e "${GREEN}Using ANTHROPIC_API_KEY from your environment.${RESET}"
+elif [ -f "$ENV_FILE" ] && grep -q "^ANTHROPIC_API_KEY=" "$ENV_FILE" 2>/dev/null; then
+    echo -e "${GREEN}Using the API key already saved at $ENV_FILE${RESET}"
+elif [ -t 0 ]; then
+    echo ""
+    echo -e "${BOLD}Anthropic API key${RESET} ${DIM}(powers the conversational assistant)${RESET}"
+    echo -e "${DIM}Create one at https://console.anthropic.com/settings/keys${RESET}"
+    echo -e "${DIM}Press Enter to skip — the offline wizard works without a key.${RESET}"
+    printf "  Paste key: "
+    read -r USER_KEY
+    if [ -n "$USER_KEY" ]; then
+        mkdir -p "$INSTALL_DIR"
+        touch "$ENV_FILE"
+        chmod 600 "$ENV_FILE"
+        # Drop any previous value, then append the new one.
+        grep -v "^ANTHROPIC_API_KEY=" "$ENV_FILE" > "$ENV_FILE.tmp" 2>/dev/null || true
+        mv "$ENV_FILE.tmp" "$ENV_FILE"
+        echo "ANTHROPIC_API_KEY=$USER_KEY" >> "$ENV_FILE"
+        chmod 600 "$ENV_FILE"
+        echo -e "${GREEN}Saved to $ENV_FILE${RESET}"
+    else
+        echo -e "${DIM}Skipped. Run 'llm-forge wizard' for the offline guided setup.${RESET}"
+    fi
+else
+    # Piped install (curl | bash) has no stdin to prompt on.
+    echo -e "${YELLOW}No API key configured.${RESET}"
+    echo -e "${DIM}Set one later:  export ANTHROPIC_API_KEY=sk-ant-...${RESET}"
+    echo -e "${DIM}Or run 'llm-forge wizard' for the offline guided setup.${RESET}"
+fi
 
 # Create launcher
 cat > "$INSTALL_DIR/bin/llm-forge" << 'LAUNCHER'
@@ -195,7 +233,7 @@ done
 
 # Activate in current session
 export PATH="$HOME/.llm-forge/bin:$PATH"
-# Keys are built into the package — no .env sourcing needed
+# API keys live in ~/.llm-forge/.env and are read by llm_forge.chat.api_keys
 
 # -----------------------------------------------------------------------
 # Step 6: Verify it works

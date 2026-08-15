@@ -320,23 +320,13 @@ def _cmd_model(engine: ChatEngine, args: str) -> str:
                 f"  {key:<14} {info['name']:<22} {info['context']:<18} {info['cost']}{marker}"
             )
         lines.append("")
-        lines.append("Switch with: /model <key>  (e.g. /model opus-4.6)")
+        lines.append("Switch with: /model <key>  (e.g. /model opus-5)")
         return "\n".join(lines)
 
-    # Shortcuts: allow partial matches
-    shortcuts = {
-        "opus": "opus-4.6",
-        "sonnet": "sonnet-4.6",
-        "haiku": "haiku-4.5",
-        "opus4.6": "opus-4.6",
-        "sonnet4.6": "sonnet-4.6",
-        "haiku4.5": "haiku-4.5",
-        "opus-4.5": "opus-4.5",
-        "sonnet-4.5": "sonnet-4.5",
-        "opus4.5": "opus-4.5",
-        "sonnet4.5": "sonnet-4.5",
-    }
-    resolved = shortcuts.get(args, args)
+    from llm_forge.chat.claude_models import MODEL_ALIASES
+
+    normalised = args.strip().lower()
+    resolved = normalised if normalised in CLAUDE_MODELS else MODEL_ALIASES.get(normalised, "")
 
     if resolved not in CLAUDE_MODELS:
         return f"Unknown model: {args}\nAvailable: {', '.join(CLAUDE_MODELS.keys())}"
@@ -413,7 +403,7 @@ COMMANDS: dict[str, dict] = {
     "/quit": {"description": "Exit the chat session", "handler": _cmd_quit},
     "/version": {"description": "Show llm-forge version", "handler": _cmd_version},
     "/model": {
-        "description": "Show or switch model (e.g. /model opus-4.6 or /model llama-3.1-8b)",
+        "description": "Show or switch model (e.g. /model opus-5 or /model llama-3.1-8b)",
         "handler": _cmd_model,
     },
     "/paste": {
