@@ -49,6 +49,15 @@ DEFAULT_MODEL = "opus-5"
 # compaction) where the task is simple and volume is high.
 SUMMARY_MODEL_ID = "claude-haiku-4-5"
 
+# Adaptive thinking: Claude decides per request how much to reason. Opus 5
+# thinks by default, so passing this changes nothing about *whether* it thinks
+# -- what it buys is `display: "summarized"`, without which thinking blocks
+# stream with empty text and the UI shows a long dead pause before any output.
+ADAPTIVE_THINKING: dict[str, str] = {"type": "adaptive", "display": "summarized"}
+
+# The orchestrator only routes to sub-agents; it should not deliberate.
+ROUTER_OUTPUT_CONFIG: dict[str, str] = {"effort": "low"}
+
 # Friendly aliases accepted by the /model slash command.
 MODEL_ALIASES: dict[str, str] = {
     "opus": "opus-5",

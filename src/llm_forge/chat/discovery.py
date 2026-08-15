@@ -54,6 +54,19 @@ METHOD_LABELS: dict[str, str] = {
     "mlx_lora_4bit": "MLX LoRA (4-bit base, Apple Silicon)",
 }
 
+# How each method's bytes-per-param splits across weights / gradients /
+# optimizer state. Kept alongside BYTES_PER_PARAM so a breakdown can be shown
+# without a second set of constants that could disagree with the total.
+BYTES_BREAKDOWN: dict[str, dict[str, float]] = {
+    # bf16 weights, bf16 grads, fp32 Adam m+v and fp32 master copy
+    "full": {"weights": 2.0, "gradients": 2.0, "optimizer": 12.0},
+    "full_8bit_optim": {"weights": 2.0, "gradients": 2.0, "optimizer": 4.0},
+    # Frozen bf16 base; grads and optimizer cover only the adapter (~3% of params)
+    "lora": {"weights": 2.0, "gradients": 0.2, "optimizer": 0.4},
+    "qlora": {"weights": 0.5, "gradients": 0.15, "optimizer": 0.25},
+    "mlx_lora_4bit": {"weights": 0.5, "gradients": 0.15, "optimizer": 0.25},
+}
+
 # Which backends each method can actually run on.
 METHOD_BACKENDS: dict[str, set[str]] = {
     "full": {"cuda", "mps", "mlx"},
@@ -88,6 +101,7 @@ class FitVerdict:
     budget_gb: float
     fits: bool
     note: str = ""
+    breakdown: dict[str, float] = field(default_factory=dict)
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -97,6 +111,7 @@ class FitVerdict:
             "budget_gb": round(self.budget_gb, 1),
             "fits": self.fits,
             "note": self.note,
+            "breakdown": {k: round(v, 2) for k, v in self.breakdown.items()},
         }
 
 
@@ -140,6 +155,7 @@ def assess_fit(
         elif method == "full" and fits and backend in {"mps", "mlx"}:
             note = "Feasible, but expect slow steps -- MPS has no fused optimizer."
 
+        components = BYTES_BREAKDOWN[method]
         verdicts.append(
             FitVerdict(
                 method=method,
@@ -148,6 +164,12 @@ def assess_fit(
                 budget_gb=budget_gb,
                 fits=fits,
                 note=note,
+                breakdown={
+                    "model_weights_gb": num_params * components["weights"] / (1024**3),
+                    "gradients_gb": num_params * components["gradients"] / (1024**3),
+                    "optimizer_gb": num_params * components["optimizer"] / (1024**3),
+                    "activations_gb": act,
+                },
             )
         )
     return verdicts
@@ -619,7 +641,8 @@ def web_search(query: str, *, max_uses: int = 5, client: Any = None) -> str:
     try:
         response = client.messages.create(
             model=model_id(DEFAULT_MODEL),
-            max_tokens=4096,
+            # Server-side searches plus thinking share this budget.
+            max_tokens=16000,
             tools=[
                 {
                     "type": WEB_SEARCH_TOOL_TYPE,

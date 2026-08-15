@@ -323,17 +323,35 @@ Note: Cannot enable both load_in_4bit and load_in_8bit simultaneously.
 - mps_high_watermark_ratio: float --- MPS memory limit (default: 0.0 = no limit)
 
 ### Model Selection Guide
+
+This table is a starting point, NOT an authority. `search_huggingface` returns
+a real parameter count and a per-method memory verdict for the actual machine;
+prefer that over anything here.
+
+**NVIDIA / CUDA** (QLoRA available -- bitsandbytes needs CUDA):
 | VRAM Available   | Recommended Model                    | Training Mode | Notes                        |
 |-----------------|--------------------------------------|---------------|-------------------------------|
-| No GPU (CPU)    | HuggingFaceTB/SmolLM2-135M          | QLoRA         | CPU-only, very slow          |
 | 8 GB            | unsloth/Llama-3.2-1B-Instruct       | QLoRA         | 4-bit quantization required  |
 | 12 GB           | unsloth/Llama-3.2-1B-Instruct       | LoRA          | Full precision LoRA          |
 | 16-24 GB        | meta-llama/Llama-3.2-3B-Instruct    | LoRA          | Ideal consumer GPU range     |
 | 24+ GB          | microsoft/Phi-3-mini-4k-instruct    | LoRA          | 3.8B params, strong          |
 | 40+ GB          | meta-llama/Llama-3.1-8B-Instruct    | LoRA          | Best quality for 1 GPU       |
 | 80+ GB (A100)   | meta-llama/Llama-3.1-8B-Instruct    | Full or LoRA  | Can do full fine-tune        |
-| Apple Silicon   | unsloth/Llama-3.2-1B-Instruct       | LoRA (MPS)    | Or use MLX backend           |
-| Apple MLX       | mlx-community/Llama-3.2-1B-Instruct | MLX LoRA      | Native Apple Silicon         |
+
+**Apple Silicon** -- budget is *usable unified memory* (total RAM minus ~6 GB
+for the OS), not installed RAM. `training.mode: qlora` DOES NOT WORK here;
+4-bit means `mlx.enabled: true`.
+| Usable Memory   | Recommended Model                    | Training Mode      | Notes                        |
+|-----------------|--------------------------------------|--------------------|------------------------------|
+| ~10 GB (16 GB)  | HuggingFaceTB/SmolLM2-360M          | full (bf16)        | Every weight updated         |
+| ~10 GB (16 GB)  | meta-llama/Llama-3.2-1B-Instruct    | LoRA (MPS)         | bf16 frozen base             |
+| ~18 GB (24 GB)  | meta-llama/Llama-3.2-1B-Instruct    | full (bf16)        | Full fine-tune fits          |
+| ~18 GB (24 GB)  | meta-llama/Llama-3.2-3B-Instruct    | LoRA (MPS)         | Comfortable                  |
+| ~18 GB (24 GB)  | mlx-community/Llama-3.1-8B-Instruct-4bit | MLX LoRA     | 8B reachable via MLX 4-bit   |
+| ~42 GB (48 GB)  | mlx-community/Qwen2.5-14B-Instruct-4bit  | MLX LoRA     | 14B class                    |
+
+**CPU only:** HuggingFaceTB/SmolLM2-135M, LoRA. Very slow. QLoRA is not an
+option -- bitsandbytes has no CPU kernel.
 
 ### Training Best Practices (from production experience)
 - **LoRA rank 8-16** for domain adaptation (higher ranks = more forgetting risk)
@@ -353,7 +371,7 @@ Note: Cannot enable both load_in_4bit and load_in_8bit simultaneously.
 ### Common Errors and Fixes
 | Error                                  | Cause                                          | Fix                                                                 |
 |----------------------------------------|------------------------------------------------|----------------------------------------------------------------------|
-| CUDA out of memory (OOM)               | Batch size or model too large for VRAM         | Reduce per_device_train_batch_size, enable gradient_checkpointing, use QLoRA, or use a smaller model |
+| CUDA out of memory (OOM)               | Batch size or model too large for VRAM         | Reduce per_device_train_batch_size, enable gradient_checkpointing, then take recommended_mode from estimate_training (QLoRA on CUDA, MLX 4-bit on Apple), or use a smaller model |
 | NaN loss during training               | Learning rate too high or data contains NaN/Inf | Reduce learning_rate to 1e-5, enable data cleaning, check for corrupt samples |
 | Gibberish / random output              | Trained on wrong tokens (system/user)          | Set assistant_only_loss: true, ensure chat template has generation markers |
 | Catastrophic forgetting                | Over-adapted to fine-tuning data               | Reduce LoRA rank to 8, target attention-only, lower learning_rate, use 1 epoch |

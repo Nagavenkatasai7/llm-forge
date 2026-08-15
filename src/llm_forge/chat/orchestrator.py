@@ -37,6 +37,7 @@ logger = logging.getLogger(__name__)
 from llm_forge.chat.claude_models import (  # noqa: E402
     CLAUDE_MODELS,
     DEFAULT_MODEL,
+    ROUTER_OUTPUT_CONFIG,
     model_id as _resolve_model_id,
 )
 
@@ -237,7 +238,11 @@ class OrchestratorEngine:
             else:
                 response = self._client.messages.create(
                     model=model_id,
-                    max_tokens=2048,
+                    # This engine only routes to sub-agents, so low effort is
+                    # right -- but thinking still shares the max_tokens budget,
+                    # and 2048 truncated the router mid tool call.
+                    max_tokens=8192,
+                    output_config=ROUTER_OUTPUT_CONFIG,
                     system=self._system,
                     tools=ORCHESTRATOR_TOOLS,
                     messages=self.messages,
@@ -301,7 +306,8 @@ class OrchestratorEngine:
 
         with self._client.messages.stream(
             model=model_id,
-            max_tokens=2048,
+            max_tokens=8192,
+            output_config=ROUTER_OUTPUT_CONFIG,
             system=self._system,
             tools=ORCHESTRATOR_TOOLS,
             messages=self.messages,

@@ -856,24 +856,54 @@ def _detect_hardware() -> str:
                 info["gpus"].append(
                     {
                         "name": props.name,
-                        "vram_gb": round(props.total_mem / (1024**3), 1),
+                        # total_memory, not total_mem -- the latter does not
+                        # exist and raised AttributeError on every CUDA machine.
+                        "vram_gb": round(props.total_memory / (1024**3), 1),
                         "compute_capability": f"{props.major}.{props.minor}",
                     }
                 )
             info["cuda_version"] = torch.version.cuda
-            info["recommendation"] = _gpu_recommendation(info["gpus"][0]["vram_gb"])
-        elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-            info["gpu_type"] = "apple_mps"
-            info["gpu_name"] = _get_apple_chip_name()
+            info["backend"] = "cuda"
+            info["usable_memory_gb"] = info["gpus"][0]["vram_gb"]
             info["recommendation"] = _gpu_recommendation(
-                info["ram_total_gb"] * 0.75 if isinstance(info["ram_total_gb"], (int, float)) else 8
+                info["gpus"][0]["vram_gb"], backend="cuda"
             )
+        elif getattr(torch.backends, "mps", None) is not None and torch.backends.mps.is_available():
+            from llm_forge.training.mac_utils import usable_unified_memory_gb
+
+            total_ram = info["ram_total_gb"] if isinstance(info["ram_total_gb"], (int, float)) else 16.0
+            usable = round(usable_unified_memory_gb(total_ram), 1)
+
+            info["gpu_type"] = "apple_mps"
+            info["backend"] = "mps"
+            info["gpu_name"] = _get_apple_chip_name()
+            info["unified_memory_gb"] = total_ram
+            info["usable_memory_gb"] = usable
+            info["memory_note"] = (
+                f"Apple Silicon has no dedicated VRAM -- the GPU shares the "
+                f"{total_ram} GB of system RAM. Budget {usable} GB for training; "
+                f"the rest is the OS and other apps. Exceeding it swaps rather "
+                f"than OOMs, which makes training pathologically slow instead of "
+                f"failing fast."
+            )
+            info["unavailable_here"] = [
+                "bitsandbytes (QLoRA 4-bit, 8-bit optimizers) -- CUDA only",
+                "FlashAttention-2 -- CUDA only",
+                "DeepSpeed / Megatron -- CUDA only",
+            ]
+            info["recommendation"] = _gpu_recommendation(usable, backend="mps")
         else:
             info["gpu_type"] = "none"
+            info["backend"] = "cpu"
+            info["usable_memory_gb"] = 0
             info["recommendation"] = {
-                "mode": "qlora",
+                "mode": "lora",
                 "max_model": "SmolLM2-135M (CPU testing only)",
-                "note": "No GPU detected. Training will be very slow. Consider using Google Colab for free GPU access.",
+                "note": (
+                    "No GPU detected. Training will be very slow. Consider Google "
+                    "Colab for free GPU access. QLoRA is not an option -- "
+                    "bitsandbytes has no CPU kernel."
+                ),
             }
     except ImportError:
         info["gpu_type"] = "unknown (torch not installed)"
@@ -882,45 +912,66 @@ def _detect_hardware() -> str:
     return json.dumps(info, indent=2)
 
 
-def _gpu_recommendation(vram_gb: float) -> dict:
-    """Return training recommendations based on available VRAM."""
+def _gpu_recommendation(vram_gb: float, backend: str = "cuda") -> dict:
+    """Return training recommendations for a memory budget and backend.
+
+    ``backend`` matters: recommending QLoRA on Apple Silicon sends the user
+    down a path that cannot work, because bitsandbytes is CUDA-only. On MPS the
+    4-bit option is MLX instead.
+    """
+    apple = backend == "mps"
+    small_model_4bit = "mlx (4-bit)" if apple else "qlora"
+
     if vram_gb >= 80:
-        return {
+        rec = {
             "mode": "lora or full",
             "max_model": "Llama-3.2-3B (full) or 7B+ (LoRA)",
             "batch_size": "8-16",
         }
     elif vram_gb >= 40:
-        return {
+        rec = {
             "mode": "lora",
             "max_model": "Llama-3.2-3B or Phi-3-mini (3.8B)",
             "batch_size": "4-8",
         }
     elif vram_gb >= 24:
-        return {
-            "mode": "lora or qlora",
-            "max_model": "Llama-3.2-3B (LoRA) or 7B (QLoRA)",
+        rec = {
+            "mode": f"lora or {small_model_4bit}",
+            "max_model": f"Llama-3.2-3B (LoRA) or 7-8B ({small_model_4bit})",
             "batch_size": "2-4",
         }
+    elif vram_gb >= 16:
+        rec = {
+            "mode": f"full (1B), lora (3B), or {small_model_4bit} (8B)",
+            "max_model": "Llama-3.2-1B full fine-tune, or 8B with 4-bit adapters",
+            "batch_size": "1-2",
+        }
     elif vram_gb >= 12:
-        return {
-            "mode": "qlora",
-            "max_model": "Llama-3.2-1B (LoRA) or 3B (QLoRA)",
+        rec = {
+            "mode": f"lora or {small_model_4bit}",
+            "max_model": f"Llama-3.2-1B (LoRA) or 3B ({small_model_4bit})",
             "batch_size": "1-2",
         }
     elif vram_gb >= 8:
-        return {
-            "mode": "qlora",
+        rec = {
+            "mode": f"lora or {small_model_4bit}",
             "max_model": "Llama-3.2-1B",
             "batch_size": "1",
         }
     else:
-        return {
-            "mode": "qlora",
+        rec = {
+            "mode": "lora",
             "max_model": "SmolLM2-135M",
             "batch_size": "1",
-            "note": "Limited VRAM. Consider QLoRA with a small model.",
+            "note": "Limited memory. Use a small model.",
         }
+
+    if apple:
+        rec["backend_note"] = (
+            "Apple Silicon: set mlx.enabled: true for 4-bit work. "
+            "training.mode: qlora will fail -- bitsandbytes is CUDA-only."
+        )
+    return rec
 
 
 def _get_apple_chip_name() -> str:
@@ -1804,34 +1855,45 @@ def _parse_model_params(model_name: str) -> float:
 
 
 def _detect_available_vram() -> tuple[float, str]:
-    """Detect available VRAM in GB and device type.
+    """Detect usable training memory in GB and the device class.
 
-    Returns (vram_gb, device_type) where device_type is one of:
-    "cuda", "mps", "cpu".
+    Returns ``(usable_gb, device_type)`` where device_type is one of
+    ``"a100"``, ``"consumer_gpu"``, ``"mps"``, or ``"cpu"``.
+
+    "Usable" is deliberately not "installed". On Apple Silicon the GPU has no
+    dedicated VRAM -- it shares system RAM with the OS -- so sizing a run
+    against the full total makes it swap, which on Metal costs far more than it
+    saves.
     """
     try:
         import torch
+    except ImportError:
+        return 0.0, "cpu"
 
+    try:
         if torch.cuda.is_available():
             props = torch.cuda.get_device_properties(0)
-            vram_gb = props.total_mem / (1024**3)
+            # The attribute is total_memory. This previously read `total_mem`,
+            # which does not exist -- so this raised AttributeError on every
+            # CUDA machine and took estimate_training down with it.
+            vram_gb = props.total_memory / (1024**3)
             name = props.name.lower()
-            if "a100" in name or "h100" in name or "a6000" in name:
-                device_type = "a100"
-            else:
-                device_type = "consumer_gpu"
+            datacentre = ("a100", "h100", "h200", "a6000", "l40", "b200")
+            device_type = "a100" if any(k in name for k in datacentre) else "consumer_gpu"
             return round(vram_gb, 1), device_type
-        elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-            # Apple Silicon — unified memory, estimate ~75% available for GPU
+
+        if getattr(torch.backends, "mps", None) is not None and torch.backends.mps.is_available():
+            from llm_forge.training.mac_utils import usable_unified_memory_gb
+
             try:
                 import psutil
 
                 total_ram = psutil.virtual_memory().total / (1024**3)
-                return round(total_ram * 0.75, 1), "mps"
             except ImportError:
-                return 8.0, "mps"
-    except ImportError:
-        pass
+                total_ram = 16.0
+            return round(usable_unified_memory_gb(total_ram), 1), "mps"
+    except Exception as exc:  # driver quirks, unusual torch builds
+        logger.debug("VRAM detection failed, assuming CPU: %s", exc)
 
     return 0.0, "cpu"
 
@@ -1850,45 +1912,36 @@ def _estimate_training(
     available_vram_gb, estimated_time_minutes, steps_total, and
     recommendation.
     """
+    from llm_forge.chat.discovery import METHOD_LABELS, assess_fit, recommended_method
+
     params_b = _parse_model_params(model_name)
-
-    # --- VRAM estimation ---
-    # Bytes per parameter for the model weights in GPU memory
-    if mode == "qlora":
-        bytes_per_param = 0.5  # 4-bit quantised
-    elif mode == "full":
-        bytes_per_param = 4.0  # fp32 master weights
-    else:  # lora — bf16 frozen weights
-        bytes_per_param = 2.0
-
-    model_vram_gb = (params_b * 1e9 * bytes_per_param) / (1024**3)
-
-    # Gradient & optimizer overhead (Adam keeps 2 extra copies of trainable params)
-    if mode == "lora":
-        # Only ~2-5% of params are trainable
-        trainable_fraction = 0.03
-    elif mode == "qlora":
-        trainable_fraction = 0.03
-    else:
-        trainable_fraction = 1.0
-
-    trainable_params_gb = (params_b * 1e9 * trainable_fraction * 4) / (1024**3)
-    # Adam states (momentum + variance): 2x the trainable params in fp32
-    optimizer_vram_gb = trainable_params_gb * 2
-
-    # Activation memory estimate (rough: proportional to batch_size * seq_length * hidden_dim)
-    # Using a simplified heuristic: ~0.5 GB per billion params per batch element
-    activation_vram_gb = params_b * batch_size * (seq_length / 2048) * 0.5
-
-    estimated_vram_gb = round(
-        model_vram_gb + trainable_params_gb + optimizer_vram_gb + activation_vram_gb,
-        1,
-    )
 
     # --- Hardware detection ---
     available_vram_gb, device_type = _detect_available_vram()
+    backend = "mps" if device_type == "mps" else ("cuda" if available_vram_gb > 0 else "cpu")
 
-    fits = estimated_vram_gb <= available_vram_gb if available_vram_gb > 0 else False
+    # The memory model lives in discovery.assess_fit so the number the agent
+    # quotes here is the same one search_huggingface used when it recommended
+    # the model. Keeping a second copy of this arithmetic is how the two drift.
+    mode_to_method = {
+        "qlora": "mlx_lora_4bit" if backend in {"mps", "mlx"} else "qlora",
+        "full": "full",
+        "lora": "lora",
+    }
+    method = mode_to_method.get(mode, "lora")
+
+    verdicts = assess_fit(
+        params_b * 1e9,
+        available_vram_gb,
+        seq_length=seq_length,
+        batch_size=batch_size,
+        backend=backend,
+    )
+    by_method = {v.method: v for v in verdicts}
+    chosen = by_method[method]
+
+    estimated_vram_gb = round(chosen.required_gb, 1)
+    fits = chosen.fits if available_vram_gb > 0 else False
 
     # --- Time estimation ---
     steps_total = math.ceil((num_samples * num_epochs) / batch_size)
@@ -1909,18 +1962,32 @@ def _estimate_training(
 
     # --- Recommendation ---
     recommendations: list[str] = []
+    best_method = recommended_method(verdicts)
+
+    if chosen.note:
+        recommendations.append(chosen.note)
+
     if not fits and available_vram_gb > 0:
-        if mode != "qlora":
-            recommendations.append("Switch to QLoRA mode to reduce memory by ~75%.")
+        # Suggest the most capable method that actually fits *this* backend --
+        # blanket "switch to QLoRA" advice is wrong on Apple Silicon, where
+        # bitsandbytes cannot run at all.
+        if best_method and best_method != method:
+            recommendations.append(
+                f"Switch to {METHOD_LABELS[best_method]}: "
+                f"{by_method[best_method].required_gb:.1f} GB vs "
+                f"{estimated_vram_gb:.1f} GB for {METHOD_LABELS[method]}."
+            )
         if batch_size > 1:
             recommendations.append(
                 f"Reduce batch_size from {batch_size} to 1 and use gradient accumulation."
             )
         if seq_length > 1024:
             recommendations.append(f"Reduce seq_length from {seq_length} to 1024.")
-        if params_b > 1:
+        if best_method is None:
             recommendations.append(
-                f"Consider a smaller model (e.g., 1B instead of {params_b:.1f}B)."
+                f"No method fits {params_b:.1f}B in {available_vram_gb:.0f} GB at "
+                f"batch_size={batch_size}, seq_length={seq_length}. Try a smaller "
+                "model -- run search_huggingface to find one that fits."
             )
     elif not fits and available_vram_gb == 0:
         recommendations.append(
@@ -1928,7 +1995,7 @@ def _estimate_training(
             "Consider Google Colab or a cloud GPU."
         )
     else:
-        recommendations.append("Looks good! The model should fit in memory.")
+        recommendations.append("Looks good -- this fits in memory.")
 
     result = {
         "status": "ok",
@@ -1939,16 +2006,20 @@ def _estimate_training(
         "estimated_vram_gb": estimated_vram_gb,
         "available_vram_gb": available_vram_gb,
         "device_type": device_type,
+        "backend": backend,
         "steps_total": steps_total,
         "estimated_time_minutes": estimated_time_minutes,
-        "breakdown": {
-            "model_weights_gb": round(model_vram_gb, 1),
-            "gradients_gb": round(trainable_params_gb, 1),
-            "optimizer_gb": round(optimizer_vram_gb, 1),
-            "activations_gb": round(activation_vram_gb, 1),
-        },
+        "recommended_mode": best_method,
+        "breakdown": {k: round(v, 1) for k, v in chosen.breakdown.items()},
+        "all_methods": [v.as_dict() for v in verdicts],
         "recommendation": " ".join(recommendations),
     }
+    if device_type == "mps":
+        result["memory_note"] = (
+            f"available_vram_gb is usable unified memory, not installed RAM -- "
+            f"the OS keeps the difference. Training sized against the full "
+            f"total will swap."
+        )
     return json.dumps(result, indent=2)
 
 

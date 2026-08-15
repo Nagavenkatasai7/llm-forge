@@ -184,6 +184,13 @@ def _stage_training(context: dict[str, Any]) -> dict[str, Any]:
     """Run model fine-tuning (PyTorch or MLX backend)."""
     config = context["config"]
 
+    # Fail before anything downloads. A QLoRA config on Apple Silicon otherwise
+    # gets several minutes and a multi-gigabyte download in before bitsandbytes
+    # raises inside from_pretrained.
+    from llm_forge.training.preflight import assert_compatible
+
+    assert_compatible(config)
+
     # Route to MLX backend if enabled
     if hasattr(config, "mlx") and config.mlx.enabled:
         return _stage_training_mlx(context)

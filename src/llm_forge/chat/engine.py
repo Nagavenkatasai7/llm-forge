@@ -43,6 +43,7 @@ def _get_anthropic_client():
 
 # Model catalogue lives in claude_models.py so engine and orchestrator cannot drift.
 from llm_forge.chat.claude_models import (  # noqa: E402
+    ADAPTIVE_THINKING,
     CLAUDE_MODELS,
     DEFAULT_MODEL,
     model_id as _resolve_model_id,
@@ -61,6 +62,7 @@ def _call_anthropic(
     response = client.messages.create(
         model=model_id,
         max_tokens=16000,
+        thinking=ADAPTIVE_THINKING,
         system=system,
         tools=TOOLS,
         messages=messages,
@@ -89,7 +91,10 @@ def _stream_anthropic(
 
     with client.messages.stream(
         model=model_id,
-        max_tokens=4096,
+        # Thinking is on by default on Opus 5, and max_tokens caps thinking and
+        # response text together -- 4096 truncated answers mid-sentence.
+        max_tokens=16000,
+        thinking=ADAPTIVE_THINKING,
         system=system,
         tools=TOOLS,
         messages=messages,
