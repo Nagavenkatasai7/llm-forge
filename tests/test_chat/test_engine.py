@@ -11,6 +11,8 @@ import json
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
 from llm_forge.chat.engine import ChatEngine
 from llm_forge.chat.memory import MemoryManager
 
@@ -238,3 +240,54 @@ class TestOllamaProviderDetection:
         ):
             engine = ChatEngine(project_dir=str(tmp_path), model_key="opus-5")
         assert engine.model_key == "qwen3.5:397b"
+
+
+class TestToolArgumentParsing:
+    """A malformed tool payload must never end the turn."""
+
+    def test_normal_object(self) -> None:
+        from llm_forge.chat.engine import _parse_tool_arguments
+
+        assert _parse_tool_arguments('{"path": "a.jsonl"}') == [{"path": "a.jsonl"}]
+
+    def test_concatenated_objects_become_two_calls(self) -> None:
+        """`{...}{...}` is the model asking for two calls, not a parse failure."""
+        from llm_forge.chat.engine import _parse_tool_arguments
+
+        result = _parse_tool_arguments('{"command": "ls"}{"command": "pwd"}')
+        assert result == [{"command": "ls"}, {"command": "pwd"}]
+
+    def test_markdown_fence_is_stripped(self) -> None:
+        from llm_forge.chat.engine import _parse_tool_arguments
+
+        raw = '```json\n{"path": "b.jsonl"}\n```'
+        assert _parse_tool_arguments(raw) == [{"path": "b.jsonl"}]
+
+    @pytest.mark.parametrize("raw", ["", "   ", None])
+    def test_empty_means_no_arguments(self, raw) -> None:
+        from llm_forge.chat.engine import _parse_tool_arguments
+
+        assert _parse_tool_arguments(raw) == [{}]
+
+    def test_garbage_is_flagged_not_raised(self) -> None:
+        from llm_forge.chat.engine import _parse_tool_arguments
+
+        result = _parse_tool_arguments("not json at all")
+        assert "__invalid_tool_arguments__" in result[0]
+
+    def test_trailing_garbage_keeps_the_good_call(self) -> None:
+        from llm_forge.chat.engine import _parse_tool_arguments
+
+        assert _parse_tool_arguments('{"a": 1} junk') == [{"a": 1}]
+
+    def test_invalid_payload_returns_guidance_to_the_model(self, tmp_path: Path) -> None:
+        """The model must get something it can correct itself from."""
+        engine = ChatEngine(provider="none", project_dir=str(tmp_path))
+        result = json.loads(
+            engine._execute_tool(
+                "run_command",
+                {"__invalid_tool_arguments__": "{}{}", "__error__": "Extra data"},
+            )
+        )
+        assert result["status"] == "error"
+        assert "one JSON object" in result["fix"]

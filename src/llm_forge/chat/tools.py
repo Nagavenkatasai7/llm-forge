@@ -695,8 +695,81 @@ TOOLS = [
 # ---------------------------------------------------------------------------
 
 
+def _tool_schema(name: str) -> dict | None:
+    """Return a tool's declared input schema, if it has one."""
+    for tool in TOOLS:
+        if tool.get("name") == name:
+            return tool.get("input_schema")
+    return None
+
+
+def validate_tool_input(name: str, input_data: dict) -> str | None:
+    """Check ``input_data`` against the tool's declared schema.
+
+    Returns an error message, or None when the input is usable.
+
+    The dispatcher reads required fields directly (``input_data["path"]``), so
+    an omitted field raises KeyError and the model gets back ``{"error":
+    "'path'"}`` -- a bare quoted key that says nothing about what was wrong or
+    what the tool wanted. Models cannot self-correct from that and retry the
+    same malformed call.
+
+    Validating here means the model gets the field name, the reason, and the
+    schema, which is enough to fix the call on the next turn. Borrowed from
+    grok-build's approach of making the typed input the source of truth and
+    failing structurally at the boundary rather than inside the tool body.
+    """
+    schema = _tool_schema(name)
+    if not schema:
+        return None
+
+    if not isinstance(input_data, dict):
+        return f"Tool '{name}' expects a JSON object of arguments, got {type(input_data).__name__}."
+
+    properties: dict = schema.get("properties", {}) or {}
+    required: list = schema.get("required", []) or []
+
+    missing = [field for field in required if field not in input_data]
+    if missing:
+        return json.dumps(
+            {
+                "status": "error",
+                "error": f"Missing required argument(s) for '{name}': {', '.join(missing)}",
+                "required": required,
+                "you_sent": sorted(input_data.keys()),
+                "schema": properties,
+            },
+            indent=2,
+        )
+
+    # Enum mismatches are the other common model error, and produce equally
+    # opaque failures deeper in the tool.
+    for field, value in input_data.items():
+        spec = properties.get(field)
+        if not isinstance(spec, dict):
+            continue
+        allowed = spec.get("enum")
+        if allowed and value not in allowed:
+            return json.dumps(
+                {
+                    "status": "error",
+                    "error": (
+                        f"Invalid value for '{field}' in '{name}': {value!r}"
+                    ),
+                    "allowed": allowed,
+                },
+                indent=2,
+            )
+
+    return None
+
+
 def execute_tool(name: str, input_data: dict) -> str:
     """Execute a tool and return the result as a string."""
+    problem = validate_tool_input(name, input_data)
+    if problem is not None:
+        return problem
+
     try:
         if name == "detect_hardware":
             return _detect_hardware()

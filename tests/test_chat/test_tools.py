@@ -1137,3 +1137,47 @@ class TestCompareModels:
         assert result["summary"]["ties"] == 1
         assert result["results"][0]["winner"] == "tie"
         assert result["results"][0]["reason"] == "Judge unavailable"
+
+
+class TestToolInputValidation:
+    """Structural validation at the boundary, so failures are self-correctable.
+
+    Before this, a model that omitted a required field got back
+    ``{"error": "'path'"}`` -- a bare KeyError string naming neither the tool,
+    the problem, nor the schema. Models cannot recover from that and retry the
+    same malformed call indefinitely.
+    """
+
+    def test_missing_required_field_names_it(self) -> None:
+        result = json.loads(execute_tool("scan_data", {}))
+        assert result["status"] == "error"
+        assert "path" in result["error"]
+        assert result["required"] == ["path"]
+
+    def test_error_includes_the_schema(self) -> None:
+        """The model needs to see what the tool actually wants."""
+        result = json.loads(execute_tool("scan_data", {}))
+        assert "path" in result["schema"]
+
+    def test_error_reports_what_was_sent(self) -> None:
+        result = json.loads(execute_tool("write_config", {"config": {}}))
+        assert result["you_sent"] == ["config"]
+
+    def test_invalid_enum_lists_allowed_values(self) -> None:
+        result = json.loads(
+            execute_tool("search_huggingface", {"query": "x", "search_type": "nope"})
+        )
+        assert result["status"] == "error"
+        assert result["allowed"] == ["models", "datasets"]
+
+    def test_valid_input_passes_through(self) -> None:
+        result = json.loads(execute_tool("detect_hardware", {}))
+        assert "os" in result
+
+    def test_non_dict_input_is_rejected_clearly(self) -> None:
+        assert "expects a JSON object" in execute_tool("scan_data", ["not", "a", "dict"])
+
+    def test_unknown_tool_is_not_blocked_by_validation(self) -> None:
+        """No schema means nothing to validate; the dispatcher reports it."""
+        result = json.loads(execute_tool("no_such_tool", {}))
+        assert "error" in result

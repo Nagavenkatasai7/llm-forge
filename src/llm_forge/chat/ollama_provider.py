@@ -307,8 +307,28 @@ def stream_ollama(
         tools = TOOLS
 
     collected: list[str] = []
-    # index -> {id, name, arguments}
-    partial_calls: dict[int, dict[str, str]] = {}
+    # Accumulated tool calls, in arrival order.
+    #
+    # Keyed on index *and* id rather than index alone. Some models emit several
+    # sequential tool calls all reporting index 0; keying on index alone
+    # appends the second call's arguments onto the first, producing
+    # `{...}{...}` in one string. That is not recoverable downstream -- it
+    # surfaces as `json.JSONDecodeError: Extra data` at exactly the first
+    # object's final character.
+    partial_calls: list[dict[str, Any]] = []
+
+    def slot_for(index: int, call_id: str | None) -> dict[str, Any]:
+        """Find the accumulator for this fragment, or start a new one."""
+        for slot in reversed(partial_calls):
+            if slot["index"] != index:
+                continue
+            # A new id at a known index means a *new* call, not a continuation.
+            if call_id and slot["id"] and call_id != slot["id"]:
+                break
+            return slot
+        fresh: dict[str, Any] = {"index": index, "id": "", "name": "", "arguments": ""}
+        partial_calls.append(fresh)
+        return fresh
 
     try:
         stream = client.chat.completions.create(
@@ -332,12 +352,16 @@ def stream_ollama(
                     on_text(delta.content)
 
             for tc in getattr(delta, "tool_calls", None) or []:
-                slot = partial_calls.setdefault(
-                    tc.index, {"id": "", "name": "", "arguments": ""}
-                )
+                index = getattr(tc, "index", 0) or 0
+                slot = slot_for(index, getattr(tc, "id", None))
                 if tc.id:
                     slot["id"] = tc.id
                 if tc.function and tc.function.name:
+                    # A second name at the same index is another call, not a
+                    # rename -- models that reuse index 0 send the name again.
+                    if slot["name"] and tc.function.name != slot["name"]:
+                        slot = slot_for(index, tc.id)
+                        slot["id"] = tc.id or ""
                     slot["name"] = tc.function.name
                 if tc.function and tc.function.arguments:
                     slot["arguments"] += tc.function.arguments
@@ -346,13 +370,14 @@ def stream_ollama(
 
     rebuilt = [
         SimpleNamespace(
-            id=call["id"] or f"call_{index}",
+            id=call["id"] or f"call_{position}",
             type="function",
             function=SimpleNamespace(
                 name=call["name"], arguments=call["arguments"] or "{}"
             ),
         )
-        for index, call in sorted(partial_calls.items())
+        for position, call in enumerate(partial_calls)
+        if call["name"]
     ]
 
     message = SimpleNamespace(content="".join(collected), tool_calls=rebuilt or None)

@@ -220,3 +220,72 @@ class TestStreaming:
 class TestBaseUrl:
     def test_cloud_url_is_the_openai_compatible_one(self) -> None:
         assert OLLAMA_CLOUD_BASE_URL.endswith("/v1")
+
+
+class TestConcatenatedToolCallRegression:
+    """The bug that killed a live session with `Extra data: line 1 column 101`.
+
+    Some models emit several sequential tool calls all reporting index 0.
+    Accumulating by index alone appended the second call's arguments onto the
+    first, producing `{...}{...}` in one string -- which json.loads rejects at
+    exactly the first object's final character, and the exception escaped
+    send() and destroyed the whole turn.
+    """
+
+    def _chunk(self, tool_calls):
+        return SimpleNamespace(
+            choices=[SimpleNamespace(
+                delta=SimpleNamespace(content=None, tool_calls=tool_calls))]
+        )
+
+    def _tc(self, index, id_, name, args):
+        return SimpleNamespace(
+            index=index, id=id_, function=SimpleNamespace(name=name, arguments=args)
+        )
+
+    def test_two_calls_at_index_zero_stay_separate(self) -> None:
+        import json
+
+        first = '{"command": "ls -la ~/Desktop/"}'
+        second = '{"command": "ls -la ~/Desktop/phd/"}'
+        client = fake_client(chunks=[
+            self._chunk([self._tc(0, "call_1", "run_command", first)]),
+            self._chunk([self._tc(0, "call_2", "run_command", second)]),
+        ])
+
+        response = stream_ollama([], "sys", model="m", client=client)
+        calls = response.choices[0].message.tool_calls
+
+        assert len(calls) == 2, "second call was swallowed into the first"
+        assert json.loads(calls[0].function.arguments)["command"].endswith("Desktop/")
+        assert json.loads(calls[1].function.arguments)["command"].endswith("phd/")
+
+    def test_genuine_fragments_still_join(self) -> None:
+        """Real streaming splits one call across chunks -- that must still work."""
+        import json
+
+        client = fake_client(chunks=[
+            self._chunk([self._tc(0, "call_1", "scan_data", '{"path"')]),
+            self._chunk([self._tc(0, None, None, ': "d.jsonl"}')]),
+        ])
+        response = stream_ollama([], "sys", model="m", client=client)
+        calls = response.choices[0].message.tool_calls
+
+        assert len(calls) == 1
+        assert json.loads(calls[0].function.arguments) == {"path": "d.jsonl"}
+
+    def test_distinct_indices_are_separate_calls(self) -> None:
+        client = fake_client(chunks=[
+            self._chunk([
+                self._tc(0, "a", "read_file", '{"path": "x"}'),
+                self._tc(1, "b", "read_file", '{"path": "y"}'),
+            ]),
+        ])
+        response = stream_ollama([], "sys", model="m", client=client)
+        assert len(response.choices[0].message.tool_calls) == 2
+
+    def test_nameless_slot_is_dropped(self) -> None:
+        """A fragment that never got a name is not a callable tool."""
+        client = fake_client(chunks=[self._chunk([self._tc(0, "x", None, "{}")])])
+        response = stream_ollama([], "sys", model="m", client=client)
+        assert not response.choices[0].message.tool_calls

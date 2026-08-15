@@ -139,6 +139,56 @@ def _stream_anthropic(
             )
 
 
+def _parse_tool_arguments(raw: str | None) -> list[dict]:
+    """Parse a tool call's ``arguments`` into one or more input dicts.
+
+    A bare ``json.loads`` here is a session-ending hazard. Models -- especially
+    open-weight ones behind OpenAI-compatible endpoints -- sometimes emit two
+    concatenated objects (``{...}{...}``) for what should be two separate tool
+    calls, or wrap the payload in a markdown fence. ``json.loads`` raises
+    ``Extra data`` on the first case, the exception escapes ``send()``, and the
+    whole turn dies with everything done so far discarded.
+
+    Returns a list because concatenated objects genuinely represent multiple
+    calls, and running both is what the model meant. An unparseable payload
+    yields a marker dict the tool executor turns into an error the model can
+    read and retry from, rather than an exception.
+    """
+    if not raw or not raw.strip():
+        return [{}]
+
+    text = raw.strip()
+
+    # Some models wrap arguments in a markdown fence.
+    if text.startswith("```"):
+        text = text.split("\n", 1)[-1] if "\n" in text else text
+        text = text.removeprefix("json").strip()
+        if text.endswith("```"):
+            text = text[: -len("```")].strip()
+
+    decoder = json.JSONDecoder()
+    parsed: list[dict] = []
+    position = 0
+    length = len(text)
+
+    while position < length:
+        while position < length and text[position].isspace():
+            position += 1
+        if position >= length:
+            break
+        try:
+            value, position = decoder.raw_decode(text, position)
+        except json.JSONDecodeError as exc:
+            if parsed:
+                # Recovered at least one call; ignore the trailing garbage
+                # rather than throwing away good work.
+                break
+            return [{"__invalid_tool_arguments__": text[:400], "__error__": str(exc)}]
+        parsed.append(value if isinstance(value, dict) else {"value": value})
+
+    return parsed or [{}]
+
+
 def _call_openai(messages: list[dict], system: str) -> dict:
     """Call OpenAI API with tool use (function calling)."""
     from openai import OpenAI
@@ -412,6 +462,26 @@ class ChatEngine:
         install_package, fetch_url) are gated by the PermissionSystem before
         being dispatched.
         """
+        # A payload the parser could not read. Hand the model a description of
+        # what it sent so it can correct itself, instead of raising -- a
+        # malformed argument string is a recoverable model mistake, not a bug
+        # in the tool.
+        if "__invalid_tool_arguments__" in input_data:
+            return json.dumps(
+                {
+                    "status": "error",
+                    "error": "Could not parse the arguments you sent for this tool.",
+                    "detail": input_data.get("__error__", ""),
+                    "you_sent": input_data.get("__invalid_tool_arguments__", ""),
+                    "fix": (
+                        "Send exactly one JSON object matching the tool's schema. "
+                        "Do not concatenate multiple objects, and do not wrap it "
+                        "in a markdown code fence. To make two calls, emit two "
+                        "separate tool calls."
+                    ),
+                }
+            )
+
         # Track tool names for context detection
         self._recent_tool_names.append(name)
         if len(self._recent_tool_names) > 20:
@@ -491,13 +561,14 @@ class ChatEngine:
         tool_calls = []
         if choice.message.tool_calls:
             for tc in choice.message.tool_calls:
-                tool_calls.append(
-                    {
-                        "id": tc.id,
-                        "name": tc.function.name,
-                        "input": json.loads(tc.function.arguments),
-                    }
-                )
+                for parsed in _parse_tool_arguments(tc.function.arguments):
+                    tool_calls.append(
+                        {
+                            "id": tc.id,
+                            "name": tc.function.name,
+                            "input": parsed,
+                        }
+                    )
         return text, tool_calls
 
     def _handle_openai_tools(self, response, tool_calls: list) -> None:
