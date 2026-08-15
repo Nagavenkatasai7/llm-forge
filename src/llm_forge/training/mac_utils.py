@@ -26,6 +26,37 @@ _IS_MAC = platform.system() == "Darwin"
 
 
 # ---------------------------------------------------------------------------
+# Memory budgeting
+# ---------------------------------------------------------------------------
+
+# macOS, the window server, and whatever else the user has open need headroom.
+# Training that sizes itself against the full installed total will swap, and on
+# Apple Silicon swapping during training is catastrophic for step time rather
+# than merely slow.
+_OS_RESERVE_GB = 6.0
+
+# Below this, reserving a flat 6 GB would leave nothing usable, so scale
+# instead: keep 25% for the system.
+_SMALL_MACHINE_GB = 16.0
+
+
+def usable_unified_memory_gb(total_gb: float, *, os_reserve_gb: float | None = None) -> float:
+    """Memory actually available for training on an Apple Silicon machine.
+
+    On unified-memory Macs the GPU has no dedicated VRAM -- it shares system
+    RAM. The number that matters for "will this model fit" is therefore total
+    RAM minus an OS reserve, not the total on the spec sheet.
+
+    A 24 GB M4 Pro yields about 18 GB.
+    """
+    if total_gb <= 0:
+        return 0.0
+    if os_reserve_gb is None:
+        os_reserve_gb = _OS_RESERVE_GB if total_gb > _SMALL_MACHINE_GB else total_gb * 0.25
+    return max(0.0, total_gb - os_reserve_gb)
+
+
+# ---------------------------------------------------------------------------
 # Memory monitoring
 # ---------------------------------------------------------------------------
 

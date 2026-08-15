@@ -147,7 +147,14 @@ TOOLS = [
     },
     {
         "name": "search_huggingface",
-        "description": "Search HuggingFace Hub for models or datasets matching a query.",
+        "description": (
+            "Search HuggingFace Hub for models or datasets. Model results carry "
+            "the real parameter count and a per-method memory-fit verdict for "
+            "THIS machine, so use it before recommending any base model. Dataset "
+            "results carry a ground_truth score (benchmark registration, held-out "
+            "splits, linked paper, annotation source) plus license -- use it when "
+            "the user needs a dataset whose answers can be verified."
+        ),
         "input_schema": {
             "type": "object",
             "properties": {
@@ -160,8 +167,32 @@ TOOLS = [
                     "enum": ["models", "datasets"],
                     "description": "Whether to search for models or datasets",
                 },
+                "limit": {
+                    "type": "integer",
+                    "description": "How many results to return (default 5, max 20)",
+                },
             },
             "required": ["query", "search_type"],
+        },
+    },
+    {
+        "name": "web_search",
+        "description": (
+            "Search the live web and get back an answer with source URLs. Use "
+            "for anything beyond the HuggingFace Hub: which base model is "
+            "current, what a benchmark actually measures, how a dataset was "
+            "built, whether a license permits a use. Prefer this over answering "
+            "from memory when the answer could have changed."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "What to search for, phrased as a question",
+                },
+            },
+            "required": ["query"],
         },
     },
     {
@@ -685,7 +716,15 @@ def execute_tool(name: str, input_data: dict) -> str:
         elif name == "list_configs":
             return _list_configs()
         elif name == "search_huggingface":
-            return _search_huggingface(input_data["query"], input_data["search_type"])
+            return _search_huggingface(
+                input_data["query"],
+                input_data["search_type"],
+                limit=min(int(input_data.get("limit", 5)), 20),
+            )
+        elif name == "web_search":
+            from llm_forge.chat.discovery import web_search
+
+            return web_search(input_data["query"])
         elif name == "deploy_to_ollama":
             return _deploy_to_ollama(
                 input_data["model_path"],
@@ -1358,42 +1397,56 @@ def _list_configs() -> str:
     return json.dumps({"configs": configs, "count": len(configs)}, indent=2)
 
 
-def _search_huggingface(query: str, search_type: str) -> str:
-    """Search HuggingFace Hub."""
+def _local_memory_budget() -> tuple[float | None, str]:
+    """Return ``(usable_gb, backend)`` for this machine.
+
+    On Apple Silicon the GPU shares system RAM, so the budget is unified memory
+    minus what the OS and other apps need -- not the full installed total.
+    """
     try:
-        from huggingface_hub import HfApi
+        from llm_forge.config.hardware_detector import detect_hardware
 
-        api = HfApi()
-        results = []
+        hw = detect_hardware()
+    except Exception:
+        return None, "cuda"
 
-        if search_type == "models":
-            models = api.list_models(search=query, sort="downloads", limit=5)
-            for m in models:
-                results.append(
-                    {
-                        "id": m.id,
-                        "downloads": m.downloads,
-                        "likes": m.likes,
-                    }
-                )
-        elif search_type == "datasets":
-            datasets = api.list_datasets(search=query, sort="downloads", limit=5)
-            for d in datasets:
-                results.append(
-                    {
-                        "id": d.id,
-                        "downloads": d.downloads,
-                        "likes": d.likes,
-                    }
-                )
+    if getattr(hw, "is_mps", False):
+        from llm_forge.training.mac_utils import usable_unified_memory_gb
 
-        return json.dumps({"query": query, "type": search_type, "results": results}, indent=2)
-    except ImportError:
-        return json.dumps(
-            {"error": "huggingface_hub not installed. Run: pip install huggingface_hub"}
-        )
-    except Exception as e:
-        return json.dumps({"error": str(e)})
+        return usable_unified_memory_gb(hw.system_ram_gb), "mps"
+
+    if getattr(hw, "has_gpu", False):
+        return hw.max_gpu_vram_mb / 1024.0, "cuda"
+
+    return None, "cpu"
+
+
+def _search_huggingface(
+    query: str,
+    search_type: str,
+    limit: int = 5,
+    assess_local_fit: bool = True,
+) -> str:
+    """Search the HuggingFace Hub for models or datasets.
+
+    Model results carry a real parameter count and a memory-fit verdict for
+    this machine; dataset results carry a ground-truth assessment. See
+    ``llm_forge.chat.discovery`` for how both are derived.
+    """
+    from llm_forge.chat.discovery import search_huggingface as _search
+
+    budget_gb: float | None = None
+    backend = "cuda"
+    if assess_local_fit:
+        budget_gb, backend = _local_memory_budget()
+
+    return _search(
+        query,
+        search_type,
+        limit=limit,
+        budget_gb=budget_gb,
+        backend=backend,
+    )
 
 
 # ---------------------------------------------------------------------------

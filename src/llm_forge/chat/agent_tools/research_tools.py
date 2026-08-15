@@ -3,10 +3,14 @@ from __future__ import annotations
 import json
 
 
-def search_huggingface(query: str, search_type: str = "model") -> str:
-    """Search HuggingFace Hub for models or datasets."""
+def search_huggingface(query: str, search_type: str = "model", limit: int = 5) -> str:
+    """Search HuggingFace Hub for models or datasets.
+
+    Model results include a parameter count and whether each model fits this
+    machine's memory; dataset results include a ground-truth assessment.
+    """
     from llm_forge.chat.tools import _search_huggingface
-    return _search_huggingface(query, search_type)
+    return _search_huggingface(query, search_type, limit=limit)
 
 
 def download_model(model_name: str, cache_dir: str | None = None) -> str:
@@ -22,21 +26,19 @@ def install_dependencies(feature: str) -> str:
 
 
 def web_search(query: str) -> str:
-    """Search the web for information. (Placeholder — real implementation in Phase 4.)"""
-    return json.dumps({
-        "status": "not_implemented",
-        "message": "Web search is not yet implemented. Use search_huggingface for HF Hub searches.",
-        "query": query,
-    })
+    """Search the web and return an answer with source URLs.
+
+    Runs through Anthropic's server-side web_search tool, reusing the API key
+    the chat session already needs.
+    """
+    from llm_forge.chat.discovery import web_search as _web_search
+    return _web_search(query)
 
 
 def read_url(url: str) -> str:
-    """Fetch and parse a web page. (Placeholder — real implementation in Phase 4.)"""
-    return json.dumps({
-        "status": "not_implemented",
-        "message": "URL reading is not yet implemented.",
-        "url": url,
-    })
+    """Fetch a web page and return its text content."""
+    from llm_forge.chat.execution import fetch_url
+    return fetch_url(url)
 
 
 RESEARCH_TOOL_DEFINITIONS = [
