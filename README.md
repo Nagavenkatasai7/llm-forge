@@ -74,11 +74,39 @@ Trains a tiny 135M model on bundled sample data. Works on CPU. Zero configuratio
 
 ## Prerequisites
 
-- **Python 3.10+** (the installer handles this)
-- **NVIDIA GPU with 8+ GB VRAM** (recommended) or CPU for testing
+- **Python 3.10–3.13** (the installer handles this — PyTorch has no 3.14 wheels yet)
 - **20 GB free disk space**
+- A GPU, one of:
+  - **NVIDIA with 8+ GB VRAM** — full support including QLoRA (4-bit) via bitsandbytes
+  - **Apple Silicon (M1–M4) with 16+ GB unified memory** — trains via MPS or MLX
 
 No GPU? You can test on CPU with small models, or use [Google Colab](https://colab.research.google.com) for free GPU access.
+
+### A note on Apple Silicon
+
+Unified memory is shared with the OS, so your budget is **not** the number on
+the spec sheet — roughly 6 GB goes to the system. A 24 GB Mac has about 18 GB
+for training. `llm-forge` detects this and sizes recommendations against the
+usable figure; it's shown in the status bar so you always know what you're
+working with.
+
+Some CUDA-only features do not exist on Apple Silicon, and `llm-forge` will
+tell you before a run starts rather than failing midway through:
+
+| Want | On NVIDIA | On Apple Silicon |
+|---|---|---|
+| 4-bit training | `training.mode: qlora` (bitsandbytes) | `mlx.enabled: true` + `mlx_lm.convert -q` |
+| Fast attention | FlashAttention-2 | SDPA (set automatically) |
+| Multi-GPU | DeepSpeed / FSDP | not applicable |
+
+What fits in 24 GB of unified memory (~18 GB usable):
+
+| Base model | Method | Needs |
+|---|---|---|
+| SmolLM2-360M | full fine-tune | ~5 GB |
+| Llama-3.2-1B | full fine-tune | ~15 GB |
+| Llama-3.2-3B | LoRA | ~8 GB |
+| Llama-3.1-8B | MLX LoRA (4-bit) | ~8 GB |
 
 ## Installation Options
 
