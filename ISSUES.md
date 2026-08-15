@@ -2,8 +2,7 @@
 
 Full review of llm-forge (`main` @ `be7c5a6`), with fixes on branch
 `fix/security-and-mac-training`. Every issue below is listed with its evidence
-and status. Test suite: **1295 passed, 21 skipped** (was 1222 passed before this
-work; +73 new tests).
+and status. Test suite: **1298 passed, 21 skipped** (was 1222 before this work; +76 new tests).
 
 ---
 
@@ -84,6 +83,14 @@ key that was already fetched.
 | 22 | No activity indicator. With thinking content omitted by default, there was nothing on screen between submitting and the first token — which reads as a hang | `chat/tui.py:219` | **Fixed** — live activity segment naming the running tool; cleared in every exit path including interrupt |
 | 23 | `web_search` and `read_url` had no `_TOOL_LABELS` entries, so they rendered as raw identifiers | `chat/ui.py:47-80` | **Fixed** — labels plus result summaries that lead with the finding |
 | 24 | README prerequisites were NVIDIA-only | `README.md:78` | **Fixed** — Apple Silicon section with the unified-memory explanation and a what-fits table |
+
+### Found in this pass's own work
+
+| # | Issue | Evidence | Status |
+|---|---|---|---|
+| 25 | `assess_fit` offered `full_8bit_optim` on Apple Silicon, and made it the *recommended* method for a 1.2B model on 18 GB. An 8-bit optimizer means `training.optim: adamw_8bit`, a bitsandbytes optimizer — CUDA only — and MLX's optimizer set has no 8-bit variant. The same class of error this branch exists to fix, introduced in the code meant to prevent it | `chat/discovery.py` `METHOD_BACKENDS` | **Fixed** — restricted to `{"cuda"}`; both published fit tables recomputed from real parameter counts |
+| 26 | Undefined `logger` in `_detect_available_vram`'s exception handler — would have raised `NameError` on the very path meant to degrade gracefully | `chat/tools.py:1896` | **Fixed** — caught by `ruff F821` before commit; branch forced and verified to return `(0.0, "cpu")` |
+| 27 | `warn_if_tight` written but never called | `training/preflight.py` | **Fixed** — wired into the training stage |
 
 ---
 
