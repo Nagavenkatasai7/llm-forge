@@ -1485,10 +1485,21 @@ def _check_training_status() -> str:
             capture_output=True,
             text=True,
         )
+        # Match an actual training invocation, not merely any process whose
+        # command line mentions both words. A pytest run, an editor, or a shell
+        # doing something unrelated would otherwise be reported as "training in
+        # progress" -- and the check is against the whole host process table,
+        # so a false positive here is easy to hit and confusing to diagnose.
+        training_markers = (
+            "llm_forge.train",
+            "llm-forge train",
+            "llm_forge/train",
+            "llm_forge.training",
+        )
         forge_procs = [
             line
             for line in result.stdout.split("\n")
-            if "llm_forge" in line and "train" in line and "grep" not in line
+            if any(marker in line for marker in training_markers) and "grep" not in line
         ]
         if forge_procs:
             # Process is running but monitor may not have data yet
@@ -2202,13 +2213,15 @@ def _generate_training_data(
     output_path: str | None = None,
     fmt: str = "alpaca",
 ) -> str:
-    """Generate synthetic training data using NVIDIA NIM models."""
-    from openai import OpenAI
+    """Generate synthetic training data using whichever LLM provider is set up."""
+    from llm_forge.chat.utility_llm import NoUtilityProviderError, resolve_provider
 
-    from llm_forge.chat.nvidia_provider import nvidia_client
+    try:
+        provider = resolve_provider()
+    except NoUtilityProviderError as exc:
+        return json.dumps({"status": "error", "error": str(exc)})
 
-    client = nvidia_client()
-
+    client = provider.client
     output_path = output_path or "data/synthetic_train.jsonl"
 
     # Build the generation prompt
@@ -2239,7 +2252,7 @@ def _generate_training_data(
 
         try:
             response = client.chat.completions.create(
-                model="meta/llama-3.3-70b-instruct",
+                model=provider.model,
                 messages=[{"role": "user", "content": prompt}],
                 max_tokens=4096,
                 temperature=0.8,
@@ -2292,12 +2305,15 @@ def _evaluate_with_llm(
     questions: list[str],
     criteria: str = "relevance, accuracy, helpfulness",
 ) -> str:
-    """Evaluate model outputs using NVIDIA NIM as judge."""
-    from openai import OpenAI
+    """Evaluate model outputs using whichever LLM provider is set up."""
+    from llm_forge.chat.utility_llm import NoUtilityProviderError, resolve_provider
 
-    from llm_forge.chat.nvidia_provider import nvidia_client
+    try:
+        provider = resolve_provider()
+    except NoUtilityProviderError as exc:
+        return json.dumps({"status": "error", "error": str(exc)})
 
-    client = nvidia_client()
+    client = provider.client
 
     evaluations: list[dict] = []
     for q, output in zip(questions, model_outputs, strict=False):
@@ -2312,7 +2328,7 @@ def _evaluate_with_llm(
 
         try:
             response = client.chat.completions.create(
-                model="meta/llama-3.3-70b-instruct",
+                model=provider.model,
                 messages=[{"role": "user", "content": prompt}],
                 max_tokens=500,
                 temperature=0.1,
@@ -2358,12 +2374,15 @@ def _test_model(
     system_prompt: str = "You are a helpful AI assistant.",
     num_questions: int = 1,
 ) -> str:
-    """Test a base model via NVIDIA NIM to see its capabilities."""
-    from openai import OpenAI
+    """Test a base model via the configured LLM provider to see its capabilities."""
+    from llm_forge.chat.utility_llm import NoUtilityProviderError, resolve_provider
 
-    from llm_forge.chat.nvidia_provider import nvidia_client
+    try:
+        provider = resolve_provider()
+    except NoUtilityProviderError as exc:
+        return json.dumps({"status": "error", "error": str(exc)})
 
-    client = nvidia_client()
+    client = provider.client
 
     # Handle multiple questions
     if num_questions > 1:
@@ -2412,10 +2431,30 @@ def _generate_embeddings(
     model: str = "nvidia/nv-embedqa-e5-v5",
     output_path: str | None = None,
 ) -> str:
-    """Generate embeddings using NVIDIA NIM embedding models."""
-    from openai import OpenAI
+    """Generate embeddings using NVIDIA NIM embedding models.
 
-    from llm_forge.chat.nvidia_provider import nvidia_client
+    Unlike the other LLM-backed tools, this one genuinely needs NVIDIA (or a
+    local Ollama): Ollama Cloud returns 404 for /v1/embeddings, so there is no
+    cloud fallback to route to.
+    """
+    from llm_forge.chat.nvidia_provider import has_nvidia_api_key, nvidia_client
+
+    if not has_nvidia_api_key():
+        return json.dumps(
+            {
+                "status": "error",
+                "error": (
+                    "Embeddings need an NVIDIA API key. Unlike the other tools, "
+                    "this one has no Ollama Cloud fallback -- that endpoint does "
+                    "not serve embeddings."
+                ),
+                "fix": (
+                    "Get a free key at https://build.nvidia.com/ and set "
+                    "NVIDIA_API_KEY, or run a local Ollama server which does "
+                    "support embeddings."
+                ),
+            }
+        )
 
     client = nvidia_client()
 
@@ -2477,12 +2516,15 @@ def _generate_script(
     input_file: str | None = None,
     output_file: str | None = None,
 ) -> str:
-    """Generate a Python script using NVIDIA's code model."""
-    from openai import OpenAI
+    """Generate a Python script using the configured LLM provider."""
+    from llm_forge.chat.utility_llm import NoUtilityProviderError, resolve_provider
 
-    from llm_forge.chat.nvidia_provider import nvidia_client
+    try:
+        provider = resolve_provider()
+    except NoUtilityProviderError as exc:
+        return json.dumps({"status": "error", "error": str(exc)})
 
-    client = nvidia_client()
+    client = provider.client
 
     context = f"Task: {task_description}"
     if input_file:
@@ -2507,7 +2549,7 @@ Write ONLY the Python code, no explanations:"""
 
     try:
         response = client.chat.completions.create(
-            model="meta/llama-3.3-70b-instruct",
+            model=provider.model,
             messages=[
                 {
                     "role": "system",
@@ -2557,11 +2599,14 @@ def _compare_models(
     system_prompt: str = "You are a helpful AI assistant.",
 ) -> str:
     """A/B test two models on the same questions with AI judging."""
-    from openai import OpenAI
+    from llm_forge.chat.utility_llm import NoUtilityProviderError, resolve_provider
 
-    from llm_forge.chat.nvidia_provider import nvidia_client
+    try:
+        provider = resolve_provider()
+    except NoUtilityProviderError as exc:
+        return json.dumps({"status": "error", "error": str(exc)})
 
-    client = nvidia_client()
+    client = provider.client
 
     comparisons: list[dict] = []
     a_wins = 0
@@ -2601,7 +2646,7 @@ def _compare_models(
             )
 
             judge_resp = client.chat.completions.create(
-                model="meta/llama-3.3-70b-instruct",
+                model=provider.model,
                 messages=[{"role": "user", "content": judge_prompt}],
                 max_tokens=200,
                 temperature=0.1,

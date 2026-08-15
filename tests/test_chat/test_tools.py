@@ -240,11 +240,47 @@ class TestCheckTrainingStatus:
     def test_check_training_status_idle(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Returns idle when no training running and no outputs dir."""
+        """Returns idle when no training running and no outputs dir.
+
+        The process listing is stubbed. This check greps the host's `ps aux`,
+        so leaving it live makes the test depend on whatever else happens to be
+        running -- it failed once mid-suite for exactly that reason.
+        """
+        from unittest.mock import MagicMock
+
         monkeypatch.chdir(tmp_path)
+        empty_ps = MagicMock(stdout="USER PID COMMAND\nroot 1 /sbin/launchd\n")
+        monkeypatch.setattr(
+            "llm_forge.chat.tools.subprocess.run", lambda *a, **k: empty_ps
+        )
         result = json.loads(execute_tool("check_training_status", {}))
         assert result["status"] == "idle"
         assert "No training detected" in result["message"]
+
+    def test_unrelated_process_is_not_mistaken_for_training(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A process merely mentioning both words is not a training run."""
+        from unittest.mock import MagicMock
+
+        monkeypatch.chdir(tmp_path)
+        noisy = MagicMock(
+            stdout="user 42 python -m pytest tests/test_training/ --llm_forge\n"
+        )
+        monkeypatch.setattr("llm_forge.chat.tools.subprocess.run", lambda *a, **k: noisy)
+        result = json.loads(execute_tool("check_training_status", {}))
+        assert result["status"] == "idle"
+
+    def test_real_training_process_is_detected(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from unittest.mock import MagicMock
+
+        monkeypatch.chdir(tmp_path)
+        running = MagicMock(stdout="user 42 python -m llm_forge.train --config c.yaml\n")
+        monkeypatch.setattr("llm_forge.chat.tools.subprocess.run", lambda *a, **k: running)
+        result = json.loads(execute_tool("check_training_status", {}))
+        assert result["status"] == "running"
 
 
 # ===================================================================
@@ -1181,3 +1217,30 @@ class TestToolInputValidation:
         """No schema means nothing to validate; the dispatcher reports it."""
         result = json.loads(execute_tool("no_such_tool", {}))
         assert "error" in result
+
+
+class TestUtilityToolsAreProviderAgnostic:
+    """These tools demanded an NVIDIA key even with another provider configured."""
+
+    def test_generation_reports_missing_provider_not_missing_nvidia(self) -> None:
+        from unittest.mock import patch
+
+        with patch.dict("os.environ", {}, clear=True), patch(
+            "llm_forge.chat.ollama_provider.is_local_ollama_running", return_value=False
+        ):
+            result = json.loads(
+                execute_tool("generate_training_data", {"topic": "x", "num_samples": 1})
+            )
+        assert result["status"] == "error"
+        # Must name every option, not just NVIDIA.
+        assert "OLLAMA_API_KEY" in result["error"]
+        assert "NVIDIA_API_KEY" in result["error"]
+
+    def test_embeddings_explains_why_it_is_nvidia_only(self) -> None:
+        """Ollama Cloud returns 404 for /v1/embeddings, so this one has no fallback."""
+        from unittest.mock import patch
+
+        with patch.dict("os.environ", {}, clear=True):
+            result = json.loads(execute_tool("generate_embeddings", {"texts": ["hi"]}))
+        assert result["status"] == "error"
+        assert "no Ollama Cloud fallback" in result["error"]
