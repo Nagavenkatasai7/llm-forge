@@ -404,11 +404,39 @@ def describe_models() -> str:
     return "\n".join(lines)
 
 
+# Models confirmed to accept image input through Ollama Cloud's
+# OpenAI-compatible endpoint. Verified by sending an image and checking the
+# model read text out of it -- the API advertises no vision capability flag,
+# and a model without vision returns an empty string rather than an error,
+# which is indistinguishable from a bad prompt.
+VISION_MODEL_PREFIXES: tuple[str, ...] = ("kimi-k2.6", "kimi-k3", "gemma4", "minimax-m3")
+
+
+def supports_vision(model: str) -> bool:
+    """True when ``model`` is known to accept image input."""
+    return any(model.startswith(p) for p in VISION_MODEL_PREFIXES)
+
+
+def default_vision_model(client: Any = None) -> str | None:
+    """Pick a model that can read images, preferring the current one."""
+    try:
+        models = list_models(client=client)
+    except OllamaError:
+        return None
+
+    for prefix in VISION_MODEL_PREFIXES:
+        for model in models:
+            if model.startswith(prefix):
+                return model
+    return None
+
+
 def default_model(client: Any = None) -> str | None:
     """Pick a sensible starting model from whatever the key can reach.
 
-    Preference order favours models known to handle tool-driven agent work;
-    falls back to whatever is available so a new Ollama model still works.
+    Prefers models that handle both tool-driven agent work *and* images, since
+    reading a folder of PDFs needs vision for any scanned page. Falls back to
+    whatever is available so a model Ollama adds later still works.
     """
     try:
         models = list_models(client=client)
@@ -418,7 +446,14 @@ def default_model(client: Any = None) -> str | None:
     if not models:
         return None
 
-    preferred = ("qwen3.5", "deepseek-v4-pro", "glm-5", "gpt-oss:120b", "kimi-k2")
+    preferred = (
+        "kimi-k2.6",  # tools + vision
+        "gemma4",  # tools + vision
+        "qwen3.5",  # tools only
+        "deepseek-v4-pro",
+        "glm-5",
+        "gpt-oss:120b",
+    )
     for prefix in preferred:
         for model in models:
             if model.startswith(prefix):

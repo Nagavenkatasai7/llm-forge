@@ -69,8 +69,18 @@ class TestModelListing:
 
 
 class TestDefaultModel:
-    def test_prefers_a_capable_model(self) -> None:
+    def test_prefers_a_vision_capable_model(self) -> None:
+        """Reading a folder of PDFs needs vision for any scanned page, so a
+        model that does tools *and* images beats one that only does tools."""
         client = fake_client(models=["gemma4:31b", "qwen3.5:397b", "gpt-oss:20b"])
+        assert default_model(client=client) == "gemma4:31b"
+
+    def test_kimi_k26_wins_when_available(self) -> None:
+        client = fake_client(models=["gemma4:31b", "kimi-k2.6", "qwen3.5:397b"])
+        assert default_model(client=client) == "kimi-k2.6"
+
+    def test_tool_only_model_used_when_no_vision_model_exists(self) -> None:
+        client = fake_client(models=["qwen3.5:397b", "gpt-oss:20b"])
         assert default_model(client=client) == "qwen3.5:397b"
 
     def test_falls_back_to_whatever_exists(self) -> None:

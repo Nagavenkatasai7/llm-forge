@@ -257,15 +257,48 @@ def _is_path_allowed(path: str | Path, *, allow_home: bool = False) -> bool:
     return resolved.is_relative_to(tmp)
 
 
+# Binary formats that nonetheless contain extractable text. Reading these as
+# plain text yields megabytes of noise, so read_file routes them through the
+# document converter instead.
+_DOCUMENT_EXTENSIONS: frozenset[str] = frozenset(
+    {".pdf", ".docx", ".doc", ".pptx", ".xlsx", ".odt", ".rtf", ".epub"}
+)
+
+
 def _is_binary_file(path: Path) -> bool:
-    """Heuristic check: extension in the binary list or first 8 KB contain null bytes."""
-    if path.suffix.lower() in _BINARY_EXTENSIONS:
+    """Heuristic check for content that should not be read as text.
+
+    The null-byte test alone is not enough. A ReportLab-generated PDF has no
+    null byte in its first 8 KB, so `.pdf` passed both checks and read_file
+    returned ~700 KB of raw PDF source as "content" with status ok -- flooding
+    the model's context with binary noise while telling it the read succeeded.
+    """
+    suffix = path.suffix.lower()
+    if suffix in _BINARY_EXTENSIONS or suffix in _DOCUMENT_EXTENSIONS:
         return True
     try:
         chunk = path.read_bytes()[:8192]
-        return b"\x00" in chunk
     except OSError:
         return False
+
+    if b"\x00" in chunk:
+        return True
+
+    # Decode permissively, then judge by how much of the content is actually
+    # printable. Neither test alone is sufficient: bytes 0x01-0x1F are valid
+    # UTF-8, so a control-character blob passes a decode check; and failing to
+    # decode as UTF-8 does not mean binary, since a latin-1 file ("caf\xe9") is
+    # perfectly readable text.
+    try:
+        decoded = chunk.decode("utf-8")
+    except UnicodeDecodeError:
+        decoded = chunk.decode("latin-1", errors="replace")
+
+    if not decoded:
+        return False
+
+    printable = sum(1 for ch in decoded if ch.isprintable() or ch in "\n\r\t")
+    return (printable / len(decoded)) < 0.85
 
 
 # ---------------------------------------------------------------------------
@@ -434,13 +467,24 @@ def read_file(path: str, max_lines: int = 500) -> str:
         return json.dumps({"error": f"Path is not a file: {path}", "status": "error"})
 
     if _is_binary_file(file_path):
-        return json.dumps(
-            {
-                "error": f"File appears to be binary ({file_path.suffix}); skipped.",
-                "status": "binary_skipped",
-                "size_bytes": file_path.stat().st_size,
-            }
-        )
+        suffix = file_path.suffix.lower()
+        payload: dict[str, Any] = {
+            "error": f"File appears to be binary ({file_path.suffix}); skipped.",
+            "status": "binary_skipped",
+            "size_bytes": file_path.stat().st_size,
+        }
+        # Point the model at the tool that *can* read it, rather than leaving it
+        # to guess. Without this it retries read_file or gives up.
+        if suffix in _DOCUMENT_EXTENSIONS:
+            payload["error"] = (
+                f"'{file_path.name}' is a {suffix} document, not plain text."
+            )
+            payload["use_instead"] = "read_document"
+            payload["hint"] = (
+                f"Call read_document with path='{file_path}'. It extracts the "
+                "text, and transcribes scanned pages with a vision model."
+            )
+        return json.dumps(payload)
 
     size_bytes = file_path.stat().st_size
 

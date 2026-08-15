@@ -443,3 +443,39 @@ class TestExecuteExecutionToolDispatcher:
         )
         assert result["status"] == "ok"
         assert Path(path).read_text() == "written via dispatcher"
+
+
+class TestBinaryAndDocumentDetection:
+    """read_file returned 715 KB of raw PDF as "content" with status ok."""
+
+    def test_pdf_is_not_read_as_text(self, tmp_path: Path) -> None:
+        f = tmp_path / "doc.pdf"
+        f.write_bytes(b"%PDF-1.4\nsome binary-ish content\n")
+        result = json.loads(read_file(str(f)))
+        assert result["status"] == "binary_skipped"
+
+    def test_pdf_points_at_read_document(self, tmp_path: Path) -> None:
+        """The model must be told which tool *can* read it, or it retries."""
+        f = tmp_path / "doc.pdf"
+        f.write_bytes(b"%PDF-1.4\n")
+        result = json.loads(read_file(str(f)))
+        assert result["use_instead"] == "read_document"
+
+    def test_docx_is_redirected_too(self, tmp_path: Path) -> None:
+        f = tmp_path / "resume.docx"
+        f.write_bytes(b"PK\x03\x04binary")
+        result = json.loads(read_file(str(f)))
+        assert result["use_instead"] == "read_document"
+
+    def test_latin1_text_is_still_readable(self, tmp_path: Path) -> None:
+        """Not-valid-UTF-8 does not mean binary: 'café' is text."""
+        f = tmp_path / "latin.txt"
+        f.write_bytes(b"caf\xe9\n")
+        result = json.loads(read_file(str(f)))
+        assert result["status"] == "ok"
+
+    def test_high_entropy_bytes_are_binary(self, tmp_path: Path) -> None:
+        f = tmp_path / "blob.unknown"
+        f.write_bytes(bytes(range(1, 32)) * 40)
+        result = json.loads(read_file(str(f)))
+        assert result["status"] == "binary_skipped"

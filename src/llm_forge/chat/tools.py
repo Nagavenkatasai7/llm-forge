@@ -179,6 +179,52 @@ TOOLS = [
         },
     },
     {
+        "name": "read_document",
+        "description": (
+            "Read a PDF, DOCX, image, or text file and return its content. "
+            "USE THIS instead of read_file for any document -- read_file on a "
+            "PDF returns raw binary. Pages with no extractable text (scans, "
+            "certificates, photographed pages) are automatically transcribed "
+            "with a vision model, so image-only documents still come back as "
+            "text. Set analyze_figures to also describe charts and diagrams."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "Path to the document"},
+                "analyze_figures": {
+                    "type": "boolean",
+                    "description": "Also describe images/charts embedded in the document",
+                },
+                "max_vision_pages": {
+                    "type": "integer",
+                    "description": "Cap on pages sent to the vision model (default 10)",
+                },
+            },
+            "required": ["path"],
+        },
+    },
+    {
+        "name": "read_folder",
+        "description": (
+            "Read EVERY supported document in a folder in one call (PDF, DOCX, "
+            "txt, csv, json). Use this when the user points at a folder -- it "
+            "avoids listing filenames and then reading them one at a time. "
+            "Scanned pages are transcribed with vision automatically."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "folder": {"type": "string", "description": "Path to the folder"},
+                "max_files": {
+                    "type": "integer",
+                    "description": "Cap on files read (default 25)",
+                },
+            },
+            "required": ["folder"],
+        },
+    },
+    {
         "name": "web_search",
         "description": (
             "Search the live web and get back an answer with source URLs. Use "
@@ -801,6 +847,21 @@ def execute_tool(name: str, input_data: dict) -> str:
             from llm_forge.chat.discovery import web_search
 
             return web_search(input_data["query"])
+        elif name == "read_document":
+            from llm_forge.chat.documents import read_document_json
+
+            return read_document_json(
+                path=input_data["path"],
+                analyze_figures=input_data.get("analyze_figures", False),
+                max_vision_pages=int(input_data.get("max_vision_pages", 10)),
+            )
+        elif name == "read_folder":
+            from llm_forge.chat.documents import read_folder_json
+
+            return read_folder_json(
+                folder=input_data["folder"],
+                max_files=int(input_data.get("max_files", 25)),
+            )
         elif name == "deploy_to_ollama":
             return _deploy_to_ollama(
                 input_data["model_path"],
