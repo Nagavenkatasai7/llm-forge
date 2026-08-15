@@ -469,8 +469,20 @@ def launch_tui(provider: str | None = None) -> None:
 
     This is the entry point called by ``llm-forge --tui``.
     """
+    from llm_forge.chat.api_keys import ENV_FILE, has_anthropic_api_key
     from llm_forge.chat.engine import ChatEngine
     from llm_forge.chat.project_setup import detect_project_type, scaffold_project
+
+    # A full-screen app cannot prompt for a key the way the scrolling UI can --
+    # taking over the terminal first and *then* discovering there is no engine
+    # leaves the user in a live TUI that cannot answer anything. Check first.
+    if not has_anthropic_api_key():
+        print("\nThe --tui interface needs an Anthropic API key.\n")
+        print("  export ANTHROPIC_API_KEY=sk-ant-...")
+        print(f"  (or add ANTHROPIC_API_KEY=... to {ENV_FILE})\n")
+        print("Create one at https://console.anthropic.com/settings/keys\n")
+        print("No key? Run `llm-forge` for the offline guided wizard instead.\n")
+        raise SystemExit(1)
 
     # Minimal project setup (non-interactive)
     detection = detect_project_type(".")

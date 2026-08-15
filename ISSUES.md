@@ -91,6 +91,8 @@ key that was already fetched.
 | 25 | `assess_fit` offered `full_8bit_optim` on Apple Silicon, and made it the *recommended* method for a 1.2B model on 18 GB. An 8-bit optimizer means `training.optim: adamw_8bit`, a bitsandbytes optimizer — CUDA only — and MLX's optimizer set has no 8-bit variant. The same class of error this branch exists to fix, introduced in the code meant to prevent it | `chat/discovery.py` `METHOD_BACKENDS` | **Fixed** — restricted to `{"cuda"}`; both published fit tables recomputed from real parameter counts |
 | 26 | Undefined `logger` in `_detect_available_vram`'s exception handler — would have raised `NameError` on the very path meant to degrade gracefully | `chat/tools.py:1896` | **Fixed** — caught by `ruff F821` before commit; branch forced and verified to return `(0.0, "cpu")` |
 | 27 | `warn_if_tight` written but never called | `training/preflight.py` | **Fixed** — wired into the training stage |
+| 28 | **The full-screen TUI was unreachable.** `launch_tui()` was defined and its docstring said "called by `llm-forge --tui`" — but no such flag existed and nothing called the function. The entire Textual interface was dead code | `chat/tui.py:467`, `cli.py:206` | **Fixed** — `--tui` flag added and verified end to end from a real install |
+| 29 | `launch_tui` skipped the API-key check the scrolling UI does, so with no key it would take over the terminal and *then* have a dead engine, with no way to answer the prompt | `chat/tui.py:465` | **Fixed** — checks first, prints setup instructions, exits 1 |
 
 ---
 

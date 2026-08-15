@@ -219,9 +219,21 @@ def main(
         help="LLM provider for chat: anthropic, openai, or ollama.",
         hidden=True,
     ),
+    tui: bool = typer.Option(
+        False,
+        "--tui",
+        help="Full-screen terminal app with a persistent status line, "
+        "instead of the scrolling transcript.",
+    ),
 ) -> None:
     """Build your own AI model. Just type llm-forge and start talking."""
     if ctx.invoked_subcommand is None:
+        if tui:
+            from llm_forge.chat.tui import launch_tui
+
+            launch_tui(provider=provider)
+            return
+
         from llm_forge.chat.ui import launch_chat
 
         launch_chat(provider=provider)
